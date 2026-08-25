@@ -1,0 +1,9 @@
+﻿node_modules/
+.env
+.env.local
+*.pyc
+__pycache__/
+ml/models/*.pkl
+ml/data/*.csv
+.DS_Store
+dist/
