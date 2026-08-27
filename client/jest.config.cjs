@@ -1,0 +1,6 @@
+module.exports = {
+  testEnvironment: 'jsdom',
+  setupFilesAfterEnv: ['<rootDir>/jest.setup.cjs'],
+  testMatch: ['<rootDir>/src/**/*.test.{js,jsx}'],
+  clearMocks: true
+};

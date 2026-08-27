@@ -3,6 +3,9 @@
 .env.local
 *.pyc
 __pycache__/
+venv/
+.venv/
+*.egg-info/
 ml/models/*.pkl
 ml/data/*.csv
 .DS_Store
