@@ -1,0 +1,21 @@
+{
+  "name": "smartattend-server",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Tier 2 simulated backend - Express + SQLite, mock RFID and fingerprint capture",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env src/server.js",
+    "dev": "node --env-file-if-exists=.env --watch src/server.js",
+    "db:init": "node src/db/init.js",
+    "db:seed": "node src/db/seed.js",
+    "db:reset": "node src/db/init.js --reset && node src/db/seed.js",
+    "test": "node --test src/**/*.test.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "express": "^4.21.2",
+    "morgan": "^1.10.0"
+  }
+}
