@@ -1,0 +1,20 @@
+{
+  "name": "smartattend-aws-lambdas",
+  "version": "1.0.0",
+  "description": "SmartAttend AI - AWS Lambda functions (sync ingest + red-flag notifications)",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "test": "node --test lambda/",
+    "invoke:sync": "node -e \"require('./lambda/syncHandler').handler(require('./fixtures/sync-event.json')).then(r=>console.log(r))\"",
+    "invoke:notify": "node -e \"require('./lambda/notificationHandler').handler({}).then(r=>console.log(r))\""
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1117.0",
+    "@aws-sdk/client-ses": "^3.1117.0",
+    "@aws-sdk/lib-dynamodb": "^3.1117.0",
+    "ajv": "^8.17.1",
+    "ajv-formats": "^3.0.1"
+  },
+  "comment": "The Lambda Node.js 20 runtime bundles @aws-sdk/*, so those can be marked as devDependencies or externals when bundling for deploy; they are listed here as dependencies for local runs. ajv + ajv-formats must be bundled into the deployment package."
+}

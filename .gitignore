@@ -3,6 +3,7 @@
 .env.local
 *.pyc
 __pycache__/
+.pytest_cache/
 venv/
 .venv/
 *.egg-info/
@@ -10,3 +11,9 @@ ml/models/*.pkl
 ml/data/*.csv
 .DS_Store
 dist/
+
+# SQLite (Tier 2 backend runtime data)
+server/data/
+*.db
+*.db-shm
+*.db-wal

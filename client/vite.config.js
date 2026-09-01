@@ -11,7 +11,19 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
+      // Custom service worker (src/sw/sw.js) so the outbound Background Sync
+      // queue in src/workers/syncQueue.js can live inside the worker.
+      strategies: 'injectManifest',
+      srcDir: 'src/sw',
+      filename: 'sw.js',
       registerType: 'autoUpdate',
+      injectManifest: {
+        globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
+      },
+      devOptions: {
+        enabled: false,
+        type: 'module',
+      },
       includeAssets: ['favicon.ico'],
       manifest: {
         name: 'SmartAttend AI',
@@ -34,22 +46,6 @@ export default defineConfig({
           }
         ]
       },
-      workbox: {
-        globPatterns: ['**/*.{js,css,html,ico,png,svg}'],
-        runtimeCaching: [
-          {
-            urlPattern: /^https:\/\/api\./,
-            handler: 'NetworkFirst',
-            options: {
-              cacheName: 'api-cache',
-              expiration: {
-                maxEntries: 100,
-                maxAgeSeconds: 60 * 60 * 24
-              }
-            }
-          }
-        ]
-      }
     })
   ],
 })
