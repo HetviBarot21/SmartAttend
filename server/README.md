@@ -51,6 +51,13 @@ All optional - copy `.env.example` to `.env` to override.
 | `FINGERPRINT_CHALLENGE_RATE` | `0.25` | Fraction of scans challenged for a fingerprint |
 | `FINGERPRINT_SUCCESS_RATE` | `0.9` | Fraction of challenges the mock scanner passes |
 | `SIMULATION_ENABLED` | `true` | Set `false` to boot without the RFID loop |
+| `SYNC_API_GATEWAY_URL` | *(unset)* | AWS sync Lambda endpoint. Unset → worker idles |
+| `SYNC_API_GATEWAY_KEY` | *(unset)* | `x-api-key` sent with each batch |
+| `SYNC_POLL_INTERVAL_MS` | `30000` | How often the worker drains `sync_queue` |
+| `SYNC_BATCH_SIZE` | `50` | Records per POST |
+| `SYNC_BACKOFF_MIN_MS` / `_MAX_MS` | `60000` / `1800000` | Retry backoff bounds |
+| `SYNC_MAX_ATTEMPTS` | `12` | Retryable failures before a row is parked `dead` |
+| `SYNC_WORKER_DISABLED` | `false` | Set `true` to boot without the sync worker |
 
 ## HTTP API
 
@@ -62,6 +69,7 @@ All optional - copy `.env.example` to `.env` to override.
 | GET | `/api/challenges?limit=50` | recent fingerprint challenges |
 | GET | `/api/stats?date=YYYY-MM-DD` | counts by capture method, challenge outcomes, pending sync |
 | POST | `/api/rfid/scan` | fire one scan now - body `{ "cardUid": "04A1B2C3" }` |
+| POST | `/api/sync` | inbound attendance batch from the offline PWA (see below) |
 
 Valid `cardUid` values are the 10 seeded cards: `04A1B2C3`, `04D4E5F6`,
 `0417A8B9`, `04C2D3E4`, `0455667788`, `04998877`, `04AABBCC`, `04DDEEFF`,
@@ -81,30 +89,57 @@ Valid `cardUid` values are the 10 seeded cards: `04A1B2C3`, `04D4E5F6`,
 The attendance write, its `sync_queue` entry and the audit row share one
 transaction, so a rejected write leaves nothing behind.
 
+## Sync: PWA → here → AWS
+
+Two halves, both backed by `sync_queue`:
+
+**Inbound** — `POST /api/sync` (`src/routes/sync.js`). The offline PWA posts a
+batch `{ deviceId, records: [...] }`; the whole batch is validated against
+`src/schemas/attendanceSync.schema.js`. Each record is deduplicated on `eventId`
+and on `(studentId, date)` — re-sent records are reported as skipped, not errors,
+so the PWA can safely retry whole batches. Survivors land in `attendance_events`
+(`source = 'client'`) and `sync_queue`, one transaction each. Responds `200` with
+`{ received, insertedCount, skippedCount, inserted, skipped }`.
+
+**Outbound** — `src/workers/syncWorker.js`, spawned as a worker thread by
+`server.js` (skip it with `SYNC_WORKER_DISABLED=true`). Every
+`SYNC_POLL_INTERVAL_MS` it drains `pending` rows, POSTs them in batches to
+`SYNC_API_GATEWAY_URL` (the AWS sync Lambda), marks confirmed rows `synced` and
+stamps `attendance_events.synced_at`. Retryable failures (network, 429, 5xx) are
+rescheduled with exponential backoff; a 4xx parks the row as `failed`; too many
+retries parks it as `dead`. With no `SYNC_API_GATEWAY_URL` set the worker just
+idles.
+
+With no real AWS yet, point `SYNC_API_GATEWAY_URL` at a local shim around
+`../aws/lambda/syncHandler.js`.
+
 ## Schema
 
 8 tables, defined in `src/db/schema.sql` (`CREATE TABLE IF NOT EXISTS`, so it's
 safe to run on every boot). Full description in `../docs/schema.md`.
 
 - `schools` -> `class_groups` -> `students` -> `rfid_cards`
-- `students` -> `attendance_events` -> `sync_queue`
+- `students` -> `attendance_events` -> `sync_queue` -> (`syncWorker.js`) -> AWS
 - `attendance_events` / `students` -> `fingerprint_challenges`
 - `audit_log` - standalone (action / actor / record / detail / timestamp)
 
 ## Tests
 
 ```bash
-npm test             # node --test, 27 tests
+npm test             # node --test, 39 tests
 ```
 
 Covers: all 8 tables created, seed correctness, attendance write + atomicity,
 duplicate prevention (same student/date, reused `event_id`), capture-method
 values, the RFID emitter timing (mocked timers), the fingerprint distribution,
-and the full scan-to-SQLite handler including the ~25% challenge rate.
+the full scan-to-SQLite handler including the ~25% challenge rate, the
+`POST /api/sync` ingest (validation, both dedup paths, mixed batches, unknown
+student), and the sync worker's backoff / batching / cloud-response handling.
 
 ## Not built yet
 
-- Sync endpoint for the PWA (`sync_queue` is populated but nothing drains it)
 - Risk scoring / ML (deferred - schema keeps `attendance_events` append-only so
   the history is there when it's needed)
 - Real Cognito-verified requests
+- Real AWS: `syncWorker.js` targets `SYNC_API_GATEWAY_URL`; until that's a
+  deployed endpoint, point it at a local shim around `../aws/lambda/syncHandler.js`

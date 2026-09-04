@@ -1,104 +1,133 @@
-'use strict';
+import { test, describe, beforeEach, afterEach } from 'node:test';
+import assert from 'node:assert/strict';
+import { randomUUID } from 'node:crypto';
+import { openDatabase } from '../db/index.js';
+import { seed } from '../db/seed.js';
+import { createApp } from '../app.js';
 
-process.env.SQLITE_PATH = ':memory:';
-process.env.SYNC_WORKER_DISABLED = 'true';
+let db;
+let server;
+let base;
 
-const crypto = require('crypto');
-const request = require('supertest');
-const { createApp } = require('../app');
-const { db } = require('../db');
+beforeEach(async () => {
+  db = openDatabase(':memory:');
+  seed(db);
+  server = createApp({ db, logger: false }).listen(0);
+  await new Promise((r) => server.once('listening', r));
+  base = `http://127.0.0.1:${server.address().port}`;
+});
 
-const app = createApp();
+afterEach(async () => {
+  await new Promise((r) => server.close(r));
+  db.close();
+});
+
+const postSync = (body) =>
+  fetch(`${base}/api/sync`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 
 function record(over = {}) {
   return {
-    eventId: crypto.randomUUID(),
+    eventId: randomUUID(),
     studentId: 'stu-form3b-001',
     date: '2026-02-16',
     status: 'present',
     createdAt: '2026-02-16T07:30:00.000Z',
-    ...over
+    ...over,
   };
 }
 
-afterEach(() => {
-  db.exec('DELETE FROM attendance_events; DELETE FROM sync_queue; DELETE FROM audit_log;');
-});
+const count = (sql, ...args) => db.prepare(sql).get(...args).c;
 
 describe('POST /api/sync', () => {
   test('rejects a payload with no records array', async () => {
-    const res = await request(app).post('/api/sync').send({ deviceId: 'd1' });
-    expect(res.status).toBe(400);
-    expect(res.body.error).toMatch(/invalid sync payload/);
+    const res = await postSync({ deviceId: 'd1' });
+    assert.equal(res.status, 400);
+    assert.match((await res.json()).error, /invalid sync payload/);
   });
 
   test('rejects a record with an invalid status', async () => {
-    const res = await request(app)
-      .post('/api/sync')
-      .send({ records: [record({ status: 'holiday' })] });
-    expect(res.status).toBe(400);
+    const res = await postSync({ records: [record({ status: 'holiday' })] });
+    assert.equal(res.status, 400);
   });
 
   test('rejects a non-uuid eventId', async () => {
-    const res = await request(app)
-      .post('/api/sync')
-      .send({ records: [record({ eventId: 'not-a-uuid' })] });
-    expect(res.status).toBe(400);
+    const res = await postSync({ records: [record({ eventId: 'not-a-uuid' })] });
+    assert.equal(res.status, 400);
   });
 
   test('inserts a new record and enqueues it for cloud sync', async () => {
     const rec = record();
-    const res = await request(app).post('/api/sync').send({ deviceId: 'd1', records: [rec] });
+    const res = await postSync({ deviceId: 'd1', records: [rec] });
 
-    expect(res.status).toBe(200);
-    expect(res.body).toMatchObject({ received: 1, insertedCount: 1, skippedCount: 0 });
-    expect(res.body.inserted).toEqual([rec.eventId]);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.received, 1);
+    assert.equal(body.insertedCount, 1);
+    assert.equal(body.skippedCount, 0);
+    assert.deepEqual(body.inserted, [rec.eventId]);
 
-    expect(db.prepare('SELECT COUNT(*) c FROM attendance_events').get().c).toBe(1);
-    const queued = db.prepare('SELECT status FROM sync_queue WHERE event_id = ?').get(rec.eventId);
-    expect(queued.status).toBe('pending');
-    expect(db.prepare('SELECT COUNT(*) c FROM audit_log').get().c).toBe(1);
+    assert.equal(count('SELECT COUNT(*) c FROM attendance_events'), 1);
+    const queued = db.prepare('SELECT status, payload FROM sync_queue WHERE event_id = ?').get(rec.eventId);
+    assert.equal(queued.status, 'pending');
+    assert.equal(JSON.parse(queued.payload).studentId, rec.studentId);
+    assert.equal(count("SELECT COUNT(*) c FROM audit_log WHERE action = 'sync.received'"), 1);
+    assert.equal(
+      db.prepare('SELECT source FROM attendance_events WHERE event_id = ?').get(rec.eventId).source,
+      'client'
+    );
   });
 
   test('skips a re-sent eventId (idempotent replay)', async () => {
     const rec = record();
-    await request(app).post('/api/sync').send({ records: [rec] });
-    const res = await request(app).post('/api/sync').send({ records: [rec] });
+    await postSync({ records: [rec] });
+    const res = await postSync({ records: [rec] });
 
-    expect(res.status).toBe(200);
-    expect(res.body.insertedCount).toBe(0);
-    expect(res.body.skipped).toEqual([{ eventId: rec.eventId, reason: 'duplicate_event_id' }]);
-    expect(db.prepare('SELECT COUNT(*) c FROM attendance_events').get().c).toBe(1);
+    assert.equal(res.status, 200);
+    const body = await res.json();
+    assert.equal(body.insertedCount, 0);
+    assert.deepEqual(body.skipped, [{ eventId: rec.eventId, reason: 'duplicate_event_id' }]);
+    assert.equal(count('SELECT COUNT(*) c FROM attendance_events'), 1);
   });
 
   test('skips a different event that collides on student + date', async () => {
     const first = record();
-    await request(app).post('/api/sync').send({ records: [first] });
+    await postSync({ records: [first] });
 
     const second = record({ status: 'late' }); // same student + date, new eventId
-    const res = await request(app).post('/api/sync').send({ records: [second] });
+    const res = await postSync({ records: [second] });
+    const body = await res.json();
 
-    expect(res.body.insertedCount).toBe(0);
-    expect(res.body.skipped[0]).toMatchObject({
-      eventId: second.eventId,
-      reason: 'duplicate_student_date',
-      existingEventId: first.eventId
-    });
+    assert.equal(body.insertedCount, 0);
+    assert.equal(body.skipped[0].eventId, second.eventId);
+    assert.equal(body.skipped[0].reason, 'duplicate_student_date');
+    assert.equal(body.skipped[0].existingEventId, first.eventId);
+  });
+
+  test('skips a record for a student not on this roster', async () => {
+    const res = await postSync({ records: [record({ studentId: 'stu-not-seeded' })] });
+    const body = await res.json();
+    assert.equal(body.insertedCount, 0);
+    assert.equal(body.skipped[0].reason, 'unknown_student');
   });
 
   test('settles a mixed batch: some inserted, some skipped', async () => {
-    const existing = record({ studentId: 'stu-a', date: '2026-02-16' });
-    await request(app).post('/api/sync').send({ records: [existing] });
+    const existing = record({ studentId: 'stu-form3b-001' });
+    await postSync({ records: [existing] });
 
     const batch = [
-      record({ studentId: 'stu-a', date: '2026-02-16' }), // collides -> skip
-      record({ studentId: 'stu-b', date: '2026-02-16' }), // new -> insert
-      record({ studentId: 'stu-c', date: '2026-02-16' }) // new -> insert
+      record({ studentId: 'stu-form3b-001' }), // collides -> skip
+      record({ studentId: 'stu-form3b-002' }), // new -> insert
+      record({ studentId: 'stu-form3b-003' }), // new -> insert
     ];
-    const res = await request(app).post('/api/sync').send({ records: batch });
+    const res = await postSync({ records: batch });
+    const body = await res.json();
 
-    expect(res.body.insertedCount).toBe(2);
-    expect(res.body.skippedCount).toBe(1);
-    expect(db.prepare('SELECT COUNT(*) c FROM sync_queue').get().c).toBe(3);
+    assert.equal(body.insertedCount, 2);
+    assert.equal(body.skippedCount, 1);
+    assert.equal(count('SELECT COUNT(*) c FROM sync_queue'), 3);
   });
 });

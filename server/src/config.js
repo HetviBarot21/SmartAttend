@@ -38,4 +38,20 @@ export const config = {
 
   // Start the RFID simulation loop when the server boots.
   simulationEnabled: process.env.SIMULATION_ENABLED !== 'false',
+
+  // Outbound cloud sync (src/workers/syncWorker.js). The worker drains
+  // sync_queue and POSTs batches to the AWS sync Lambda via API Gateway. With
+  // no real AWS yet, point apiUrl at a local shim around aws/lambda/syncHandler.js.
+  sync: {
+    workerDisabled: process.env.SYNC_WORKER_DISABLED === 'true',
+    apiUrl: process.env.SYNC_API_GATEWAY_URL || '',
+    apiKey: process.env.SYNC_API_GATEWAY_KEY || '',
+    pollIntervalMs: num(process.env.SYNC_POLL_INTERVAL_MS, 30_000),
+    batchSize: num(process.env.SYNC_BATCH_SIZE, 50),
+    backoffMinMs: num(process.env.SYNC_BACKOFF_MIN_MS, 60_000),
+    backoffMaxMs: num(process.env.SYNC_BACKOFF_MAX_MS, 30 * 60_000),
+    maxAttempts: num(process.env.SYNC_MAX_ATTEMPTS, 12),
+    requestTimeoutMs: num(process.env.SYNC_REQUEST_TIMEOUT_MS, 15_000),
+    deviceId: process.env.SYNC_DEVICE_ID || 'tier2-server',
+  },
 };

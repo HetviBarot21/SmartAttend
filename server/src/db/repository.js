@@ -66,7 +66,22 @@ export function recordAttendance(db, event) {
       )
       .run({ eventId, studentId, date, status, captureMethod, verified: verified ? 1 : 0, recordedBy, source });
 
-    db.prepare(`INSERT INTO sync_queue (event_id, status) VALUES (?, 'pending')`).run(eventId);
+    // Snapshot the record in the shape the sync Lambda expects
+    // (attendanceSync.schema.js). createdAt must be an RFC3339 timestamp, so it
+    // is generated here rather than read back from the row's `datetime('now')`.
+    const payload = JSON.stringify({
+      eventId,
+      studentId,
+      date,
+      status,
+      captureMethod,
+      recordedBy,
+      createdAt: new Date().toISOString(),
+    });
+    db.prepare(`INSERT INTO sync_queue (event_id, payload, status) VALUES (?, ?, 'pending')`).run(
+      eventId,
+      payload
+    );
 
     db.prepare(
       `INSERT INTO audit_log (action, actor_id, record_id, detail)

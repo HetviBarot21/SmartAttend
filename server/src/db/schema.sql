@@ -10,7 +10,8 @@
 --   rfid_cards                             - card UID -> student binding
 --   attendance_events                      - the append-only attendance log
 --   fingerprint_challenges                 - every biometric challenge + outcome
---   sync_queue                             - records waiting to reach AWS (Tier 3)
+--   sync_queue                             - records waiting to reach AWS, plus the
+--                                            outbound retry/backoff state syncWorker.js keeps
 --   audit_log                              - who/what/when, for traceability
 --
 -- Duplicate prevention is enforced by the database, not by application checks:
@@ -65,11 +66,12 @@ CREATE TABLE IF NOT EXISTS attendance_events (
   student_id     TEXT NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
   date           TEXT NOT NULL,                       -- YYYY-MM-DD, school-local
   status         TEXT NOT NULL CHECK (status IN ('present', 'absent', 'late')),
-  capture_method TEXT NOT NULL CHECK (capture_method IN ('manual', 'rfid', 'fingerprint')),
+  capture_method TEXT NOT NULL CHECK (capture_method IN ('manual', 'rfid', 'fingerprint', 'import')),
   verified       INTEGER NOT NULL DEFAULT 0 CHECK (verified IN (0, 1)),
   recorded_by    TEXT,                                -- teacher username, or NULL for hardware
   source         TEXT NOT NULL DEFAULT 'simulation' CHECK (source IN ('simulation', 'client', 'manual')),
   created_at     TEXT NOT NULL DEFAULT (datetime('now')),
+  synced_at      TEXT,                                -- set by syncWorker once AWS confirms the row
   UNIQUE (student_id, date)
 );
 
@@ -91,16 +93,28 @@ CREATE TABLE IF NOT EXISTS fingerprint_challenges (
 
 CREATE INDEX IF NOT EXISTS idx_challenge_student ON fingerprint_challenges(student_id);
 
+-- Outbound queue: one row per attendance_event that still has to reach AWS.
+--   payload          - JSON snapshot POSTed to the sync Lambda (matches
+--                      attendanceSync.schema.js). NULL for legacy rows; the
+--                      worker rebuilds it from attendance_events in that case.
+--   next_attempt_at  - ISO; NULL means "eligible now". Set by the worker's
+--                      exponential backoff after a retryable failure.
+--   status 'dead'    - retryable failures that exhausted SYNC_MAX_ATTEMPTS.
+--   status 'failed'  - the cloud rejected the payload (4xx); a retry won't help.
 CREATE TABLE IF NOT EXISTS sync_queue (
-  id             INTEGER PRIMARY KEY AUTOINCREMENT,
-  event_id       TEXT NOT NULL UNIQUE REFERENCES attendance_events(event_id) ON DELETE CASCADE,
-  status         TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'synced', 'failed')),
-  attempt_count  INTEGER NOT NULL DEFAULT 0,
-  created_at     TEXT NOT NULL DEFAULT (datetime('now')),
-  last_attempt_at TEXT
+  id              INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id        TEXT NOT NULL UNIQUE REFERENCES attendance_events(event_id) ON DELETE CASCADE,
+  payload         TEXT,
+  status          TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'synced', 'failed', 'dead')),
+  attempt_count   INTEGER NOT NULL DEFAULT 0,
+  next_attempt_at TEXT,
+  last_error      TEXT,
+  created_at      TEXT NOT NULL DEFAULT (datetime('now')),
+  last_attempt_at TEXT,
+  synced_at       TEXT
 );
 
-CREATE INDEX IF NOT EXISTS idx_sync_status ON sync_queue(status);
+CREATE INDEX IF NOT EXISTS idx_sync_status ON sync_queue(status, next_attempt_at);
 
 CREATE TABLE IF NOT EXISTS audit_log (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,

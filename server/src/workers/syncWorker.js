@@ -1,47 +1,53 @@
-'use strict';
-
 /**
- * Outbound sync worker (runs as a worker_threads Worker, spawned by index.js).
+ * Outbound sync worker (runs as a worker_threads Worker, spawned by server.js).
  *
- * Every SYNC_POLL_INTERVAL_MS it:
+ * Every config.sync.pollIntervalMs it:
  *   1. reads sync_queue rows with status='pending' that are due
  *      (next_attempt_at IS NULL OR <= now),
- *   2. splits them into batches of SYNC_BATCH_SIZE (50),
- *   3. POSTs each batch to the AWS API Gateway endpoint (SYNC_API_GATEWAY_URL),
+ *   2. splits them into batches of config.sync.batchSize (50),
+ *   3. POSTs each batch to the AWS API Gateway endpoint (config.sync.apiUrl),
  *   4. marks the rows the cloud accepted (inserted or already-present) as
  *      'synced' and stamps attendance_events.synced_at,
  *   5. on a retryable failure, schedules the row again with exponential backoff
- *      starting at SYNC_BACKOFF_MIN_MS (60s), doubling, capped at
- *      SYNC_BACKOFF_MAX_MS (30 min). After SYNC_MAX_ATTEMPTS it is parked as
- *      'dead'. A 4xx (bad payload) is parked as 'failed' immediately.
+ *      starting at backoffMinMs (60s), doubling, capped at backoffMaxMs (30 min).
+ *      After maxAttempts it is parked as 'dead'. A 4xx (bad payload) is parked
+ *      as 'failed' immediately.
  *
  * ---------------------------------------------------------------------------
- * DynamoDB Local / no real AWS yet: point SYNC_API_GATEWAY_URL at a local shim
- * that invokes aws/lambda/syncHandler.js (e.g. `sam local start-api` or a tiny
- * Express wrapper). When real credentials arrive, set SYNC_API_GATEWAY_URL to
- * the deployed API Gateway invoke URL and SYNC_API_GATEWAY_KEY to its API key -
+ * No real AWS yet: point SYNC_API_GATEWAY_URL at a local shim that invokes
+ * aws/lambda/syncHandler.js (e.g. `sam local start-api` or a tiny Express
+ * wrapper). When real credentials arrive, set SYNC_API_GATEWAY_URL to the
+ * deployed API Gateway invoke URL and SYNC_API_GATEWAY_KEY to its API key -
  * nothing else in this file changes.
  * ---------------------------------------------------------------------------
  */
 
-const { parentPort, workerData, isMainThread } = require('worker_threads');
+import { parentPort, workerData, isMainThread } from 'node:worker_threads';
+import { fileURLToPath } from 'node:url';
 
-// A Worker inherits process.env, but index.js also forwards it explicitly.
+// A Worker inherits process.env, but server.js also forwards it explicitly.
 if (workerData && workerData.env) {
   Object.assign(process.env, workerData.env);
 }
 
-const { db } = require('../db');
+const { config } = await import('../config.js');
+const { openDatabase } = await import('../db/index.js');
 
-const POLL_INTERVAL_MS = Number(process.env.SYNC_POLL_INTERVAL_MS) || 30_000;
-const BATCH_SIZE = Number(process.env.SYNC_BATCH_SIZE) || 50;
-const BACKOFF_MIN_MS = Number(process.env.SYNC_BACKOFF_MIN_MS) || 60_000;
-const BACKOFF_MAX_MS = Number(process.env.SYNC_BACKOFF_MAX_MS) || 30 * 60_000;
-const MAX_ATTEMPTS = Number(process.env.SYNC_MAX_ATTEMPTS) || 12;
-const REQUEST_TIMEOUT_MS = Number(process.env.SYNC_REQUEST_TIMEOUT_MS) || 15_000;
-const API_URL = process.env.SYNC_API_GATEWAY_URL;
-const API_KEY = process.env.SYNC_API_GATEWAY_KEY;
-const DEVICE_ID = process.env.SYNC_DEVICE_ID || 'tier2-server';
+const {
+  apiUrl: API_URL,
+  apiKey: API_KEY,
+  pollIntervalMs: POLL_INTERVAL_MS,
+  batchSize: BATCH_SIZE,
+  backoffMinMs: BACKOFF_MIN_MS,
+  backoffMaxMs: BACKOFF_MAX_MS,
+  maxAttempts: MAX_ATTEMPTS,
+  requestTimeoutMs: REQUEST_TIMEOUT_MS,
+  deviceId: DEVICE_ID,
+} = config.sync;
+
+// The worker thread opens its own connection to the same file; WAL mode lets it
+// read/write alongside the HTTP server's connection.
+const db = openDatabase();
 
 function log(level, message, extra) {
   const line = { level, message, ...extra };
@@ -60,6 +66,12 @@ const selectDue = db.prepare(`
   LIMIT @limit
 `);
 
+const rebuildPayload = db.prepare(`
+  SELECT event_id AS eventId, student_id AS studentId, date, status,
+         capture_method AS captureMethod, recorded_by AS recordedBy, created_at
+  FROM attendance_events WHERE event_id = ?
+`);
+
 const markSynced = db.prepare(`
   UPDATE sync_queue
   SET status = 'synced', synced_at = @now, last_error = NULL, next_attempt_at = NULL
@@ -72,12 +84,14 @@ const scheduleRetry = db.prepare(`
   UPDATE sync_queue
   SET attempt_count = attempt_count + 1,
       next_attempt_at = @nextAttemptAt,
+      last_attempt_at = @now,
       last_error = @error
   WHERE id = @id
 `);
 const park = db.prepare(`
   UPDATE sync_queue
-  SET status = @status, attempt_count = attempt_count + 1, last_error = @error
+  SET status = @status, attempt_count = attempt_count + 1,
+      last_attempt_at = @now, last_error = @error
   WHERE id = @id
 `);
 const audit = db.prepare(
@@ -86,16 +100,31 @@ const audit = db.prepare(
 
 // --- helpers --------------------------------------------------------------
 
-function backoffMs(attemptCount) {
+export function backoffMs(attemptCount) {
   // attemptCount is the number of attempts already made before this failure.
   const exp = BACKOFF_MIN_MS * 2 ** attemptCount;
   return Math.min(BACKOFF_MAX_MS, exp);
 }
 
-function chunk(rows, size) {
+export function chunk(rows, size) {
   const out = [];
   for (let i = 0; i < rows.length; i += size) out.push(rows.slice(i, i + size));
   return out;
+}
+
+/** SQLite datetime('now') -> RFC3339, so a rebuilt payload passes the schema. */
+function toIso(sqliteTs) {
+  if (!sqliteTs) return new Date().toISOString();
+  if (sqliteTs.includes('T')) return sqliteTs;
+  return sqliteTs.replace(' ', 'T') + 'Z';
+}
+
+/** The record to POST for one queue row: the stored snapshot, or a rebuild. */
+function payloadFor(row) {
+  if (row.payload) return JSON.parse(row.payload);
+  const r = rebuildPayload.get(row.event_id);
+  if (!r) throw new Error(`no attendance_events row for ${row.event_id}`);
+  return { ...r, createdAt: toIso(r.created_at), created_at: undefined };
 }
 
 async function postBatch(records) {
@@ -106,10 +135,10 @@ async function postBatch(records) {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
-        ...(API_KEY ? { 'x-api-key': API_KEY } : {})
+        ...(API_KEY ? { 'x-api-key': API_KEY } : {}),
       },
       body: JSON.stringify({ deviceId: DEVICE_ID, sentAt: new Date().toISOString(), records }),
-      signal: controller.signal
+      signal: controller.signal,
     });
 
     const text = await res.text();
@@ -126,7 +155,7 @@ async function postBatch(records) {
 }
 
 /** event_ids the cloud has confirmed are stored (freshly inserted or already there). */
-function acceptedEventIds(batchRecords, body) {
+export function acceptedEventIds(batchRecords, body) {
   const ids = new Set();
   for (const key of ['inserted', 'skipped']) {
     for (const entry of body?.[key] ?? []) {
@@ -157,20 +186,25 @@ const settleBatch = db.transaction((rows, records, body) => {
 });
 
 const failBatch = db.transaction((rows, { retryable, error }) => {
-  const now = Date.now();
+  const now = new Date().toISOString();
+  const ms = Date.now();
   let retried = 0;
   let parked = 0;
   for (const row of rows) {
     const attempts = row.attempt_count;
     if (retryable && attempts + 1 < MAX_ATTEMPTS) {
-      const nextAttemptAt = new Date(now + backoffMs(attempts)).toISOString();
-      scheduleRetry.run({ id: row.id, nextAttemptAt, error });
+      const nextAttemptAt = new Date(ms + backoffMs(attempts)).toISOString();
+      scheduleRetry.run({ id: row.id, nextAttemptAt, now, error });
       retried += 1;
     } else {
       const status = retryable ? 'dead' : 'failed';
-      park.run({ id: row.id, status, error });
-      audit.run('sync.parked', 'tier2-server', row.event_id,
-        JSON.stringify({ status, attempts: attempts + 1, error }));
+      park.run({ id: row.id, status, now, error });
+      audit.run(
+        'sync.parked',
+        DEVICE_ID,
+        row.event_id,
+        JSON.stringify({ status, attempts: attempts + 1, error })
+      );
       parked += 1;
     }
   }
@@ -181,7 +215,7 @@ const failBatch = db.transaction((rows, { retryable, error }) => {
 
 let ticking = false;
 
-async function tick() {
+export async function tick() {
   if (ticking) return;
   ticking = true;
   try {
@@ -196,7 +230,15 @@ async function tick() {
     log('info', `processing ${due.length} pending record(s)`);
 
     for (const batchRows of chunk(due, BATCH_SIZE)) {
-      const records = batchRows.map((r) => JSON.parse(r.payload));
+      let records;
+      try {
+        records = batchRows.map(payloadFor);
+      } catch (err) {
+        failBatch(batchRows, { retryable: false, error: `payload: ${err.message}` });
+        log('error', 'batch payload build failed - parked as failed', { error: err.message });
+        continue;
+      }
+
       let response;
       try {
         response = await postBatch(records);
@@ -204,7 +246,7 @@ async function tick() {
         // network error / timeout / DNS - always retryable
         const { retried, parked } = failBatch(batchRows, {
           retryable: true,
-          error: `network: ${err.name || 'Error'}: ${err.message}`
+          error: `network: ${err.name || 'Error'}: ${err.message}`,
         });
         log('warn', `batch network failure`, { retried, parked, error: err.message });
         continue;
@@ -219,14 +261,14 @@ async function tick() {
       } else if (response.status === 429 || response.status >= 500) {
         const { retried, parked } = failBatch(batchRows, {
           retryable: true,
-          error: `http ${response.status}: ${JSON.stringify(response.body).slice(0, 300)}`
+          error: `http ${response.status}: ${JSON.stringify(response.body).slice(0, 300)}`,
         });
         log('warn', `batch server error ${response.status}`, { retried, parked });
       } else {
         // 4xx other than 429: the payload will not become valid on retry.
         const { parked } = failBatch(batchRows, {
           retryable: false,
-          error: `http ${response.status}: ${JSON.stringify(response.body).slice(0, 300)}`
+          error: `http ${response.status}: ${JSON.stringify(response.body).slice(0, 300)}`,
         });
         log('error', `batch rejected ${response.status} - parked as failed`, { parked });
       }
@@ -238,9 +280,9 @@ async function tick() {
   }
 }
 
-function start() {
+export function start() {
   log('info', `sync worker up: every ${POLL_INTERVAL_MS}ms, batches of ${BATCH_SIZE}`, {
-    apiUrl: API_URL || '(unset)'
+    apiUrl: API_URL || '(unset)',
   });
   tick();
   const handle = setInterval(tick, POLL_INTERVAL_MS);
@@ -248,9 +290,9 @@ function start() {
 }
 
 // Start when running as the spawned Worker, or when invoked directly for a
-// one-off manual run. Stay quiet when required as a module (e.g. from tests).
-if (!isMainThread || require.main === module) {
+// one-off manual run. Stay quiet when imported as a module (e.g. from tests).
+const invokedDirectly =
+  process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (!isMainThread || invokedDirectly) {
   start();
 }
-
-module.exports = { tick, backoffMs, chunk, acceptedEventIds };

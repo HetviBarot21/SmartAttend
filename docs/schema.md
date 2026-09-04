@@ -45,11 +45,12 @@ The append-only attendance log.
 | `student_id` | FK → students |
 | `date` | `YYYY-MM-DD`, school-local |
 | `status` | `present` \| `absent` \| `late` |
-| `capture_method` | `manual` \| `rfid` \| `fingerprint` |
+| `capture_method` | `manual` \| `rfid` \| `fingerprint` \| `import` |
 | `verified` | 0/1 — 1 when a fingerprint challenge passed |
 | `recorded_by` | teacher username, or `NULL` for hardware |
 | `source` | `simulation` \| `client` \| `manual` |
 | `created_at` | timestamp |
+| `synced_at` | timestamp, set by `syncWorker.js` once AWS confirms the row; `NULL` until then |
 
 **`UNIQUE (student_id, date)`** — one record per student per day. This is the
 duplicate-prevention guarantee; it is enforced by the database, not by
@@ -67,11 +68,19 @@ A `no_match` row with `event_id IS NULL` is a **rejected scan** — no attendanc
 was written. This is the buddy-punching audit trail.
 
 ### 7. `sync_queue`
-Records waiting to reach the cloud (Tier 3, not built).
+One row per `attendance_event` that still has to reach AWS. Drained by
+`server/src/workers/syncWorker.js`.
 
-`id`, `event_id` (FK → attendance_events, **UNIQUE**), `status`
-(`pending` \| `synced` \| `failed`), `attempt_count`, `created_at`,
-`last_attempt_at`.
+| column | notes |
+|---|---|
+| `id` | int PK autoincrement |
+| `event_id` | FK → attendance_events, **UNIQUE** |
+| `payload` | JSON snapshot POSTed to the sync Lambda (matches `attendanceSync.schema.js`); `NULL` for legacy rows, which the worker rebuilds from `attendance_events` |
+| `status` | `pending` \| `synced` \| `failed` (4xx — retry won't help) \| `dead` (retryable, but `SYNC_MAX_ATTEMPTS` exhausted) |
+| `attempt_count` | POST attempts made so far |
+| `next_attempt_at` | ISO; `NULL` = eligible now. Set by exponential backoff after a retryable failure |
+| `last_error` | last failure reason, for debugging |
+| `created_at`, `last_attempt_at`, `synced_at` | timestamps |
 
 Written in the same transaction as the attendance row, so it can never reference
 a record that isn't there.

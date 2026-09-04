@@ -1,6 +1,7 @@
 import express from 'express';
 import morgan from 'morgan';
 import { createCardHandler } from './attendance/handler.js';
+import { createSyncRouter } from './routes/sync.js';
 import {
   getAttendanceForDate,
   getRecentChallenges,
@@ -44,6 +45,10 @@ export function createApp({ db, cardHandler = createCardHandler({ db }), logger 
   app.get('/api/stats', (req, res) => {
     res.json(getStats(db, req.query.date || todayISO()));
   });
+
+  // Inbound sync from the offline PWA. Lands records in attendance_events +
+  // sync_queue; src/workers/syncWorker.js pushes them on to AWS.
+  app.use('/api/sync', createSyncRouter({ db }));
 
   // Manually fire one scan - lets the demo show an outcome without waiting for
   // the 5s emitter tick. Body: { "cardUid": "04A1B2C3" }

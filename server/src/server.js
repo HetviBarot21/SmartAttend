@@ -1,3 +1,4 @@
+import { Worker } from 'node:worker_threads';
 import { config } from './config.js';
 import { getDb, closeDb } from './db/index.js';
 import { seed } from './db/seed.js';
@@ -15,6 +16,21 @@ const server = app.listen(config.port, () => {
   console.log(`SmartAttend server listening on http://localhost:${config.port}`);
   console.log(`  DB: ${config.dbPath}`);
 });
+
+// --- outbound sync worker -------------------------------------------------
+// Drains sync_queue and POSTs batches to AWS. Runs in its own thread so a slow
+// or hanging cloud request never blocks the HTTP server or the simulation.
+let syncWorker = null;
+if (!config.sync.workerDisabled) {
+  syncWorker = new Worker(new URL('./workers/syncWorker.js', import.meta.url), {
+    workerData: { env: process.env },
+  });
+  syncWorker.on('message', (m) => console.log('[syncWorker]', m));
+  syncWorker.on('error', (e) => console.error('[syncWorker] crashed', e));
+  syncWorker.on('exit', (code) => {
+    if (code !== 0) console.error(`[syncWorker] exited with code ${code}`);
+  });
+}
 
 const reader = new RfidEmitter();
 
@@ -64,7 +80,8 @@ function logOutcome(scan, result) {
 function shutdown(signal) {
   console.log(`\n${signal} received, shutting down`);
   reader.stop();
-  server.close(() => {
+  server.close(async () => {
+    if (syncWorker) await syncWorker.terminate();
     closeDb();
     process.exit(0);
   });

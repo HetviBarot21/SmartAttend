@@ -1,5 +1,3 @@
-'use strict';
-
 /**
  * JSON Schema (draft 2020-12) for the payload the PWA POSTs to /api/sync and
  * that the server in turn forwards to the AWS sync Lambda. Keep this in step
@@ -7,7 +5,7 @@
  * duplicated so the Lambda can be deployed on its own.
  */
 
-const attendanceRecordSchema = {
+export const attendanceRecordSchema = {
   type: 'object',
   additionalProperties: false,
   required: ['eventId', 'studentId', 'date', 'status', 'createdAt'],
@@ -16,13 +14,17 @@ const attendanceRecordSchema = {
     studentId: { type: 'string', minLength: 1, maxLength: 64 },
     date: { type: 'string', pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
     status: { type: 'string', enum: ['present', 'absent', 'late'] },
-    captureMethod: { type: 'string', enum: ['manual', 'rfid', 'import'], default: 'manual' },
+    captureMethod: {
+      type: 'string',
+      enum: ['manual', 'rfid', 'fingerprint', 'import'],
+      default: 'manual',
+    },
     recordedBy: { type: ['string', 'null'], maxLength: 128 },
-    createdAt: { type: 'string', format: 'date-time' }
-  }
+    createdAt: { type: 'string', format: 'date-time' },
+  },
 };
 
-const attendanceSyncSchema = {
+export const attendanceSyncSchema = {
   $schema: 'https://json-schema.org/draft/2020-12/schema',
   $id: 'https://smartattend.example/schemas/attendance-sync.json',
   title: 'AttendanceSyncBatch',
@@ -36,9 +38,7 @@ const attendanceSyncSchema = {
       type: 'array',
       minItems: 1,
       maxItems: 500,
-      items: attendanceRecordSchema
-    }
-  }
+      items: attendanceRecordSchema,
+    },
+  },
 };
-
-module.exports = { attendanceSyncSchema, attendanceRecordSchema };
