@@ -1,0 +1,209 @@
+{
+  "generated_at": "2026-09-04T09:29:53+00:00",
+  "config": {
+    "seed": 42,
+    "label": "persistent_absenteeism",
+    "persistent_absence_threshold": 0.3,
+    "label_horizon_days": 28,
+    "feature_build_step_days": 14,
+    "temporal_test_size": 0.2,
+    "temporal_gap_days": 28,
+    "enrolment_margin_days": 14,
+    "features": [
+      "attendance_rate_w1",
+      "attendance_rate_w2",
+      "attendance_rate_w3",
+      "longest_absence_streak",
+      "absence_episode_count",
+      "dow_concentration",
+      "attendance_trend"
+    ],
+    "sch01_split_boundary": "2023-05-03",
+    "train_school": "SCH-01",
+    "holdout_school": "SCH-02"
+  },
+  "datasets": {
+    "sch01_train": {
+      "n_samples": 38291,
+      "n_students": 643,
+      "date_range": [
+        "2017-02-01",
+        "2023-03-22"
+      ],
+      "positives": 10221,
+      "positive_rate": 0.2669295656942885
+    },
+    "sch01_test": {
+      "n_samples": 9384,
+      "n_students": 325,
+      "date_range": [
+        "2023-05-03",
+        "2024-10-16"
+      ],
+      "positives": 2363,
+      "positive_rate": 0.25181159420289856
+    },
+    "sch02_holdout": {
+      "n_samples": 59987,
+      "n_students": 917,
+      "date_range": [
+        "2017-02-01",
+        "2024-10-16"
+      ],
+      "positives": 11467,
+      "positive_rate": 0.19115808425158784
+    }
+  },
+  "models": {
+    "random_forest": {
+      "params": {
+        "n_estimators": 300,
+        "max_depth": null,
+        "min_samples_leaf": 5,
+        "class_weight": "balanced",
+        "random_state": 42
+      },
+      "feature_importances": {
+        "attendance_rate_w1": 0.19289123093936356,
+        "attendance_rate_w2": 0.15352181034400236,
+        "attendance_rate_w3": 0.27366770139747754,
+        "longest_absence_streak": 0.09638235777527719,
+        "absence_episode_count": 0.08091104582576295,
+        "dow_concentration": 0.08403731821463616,
+        "attendance_trend": 0.11858853550348009
+      },
+      "sch01_test": {
+        "precision": 0.3765551562068012,
+        "recall": 0.5763859500634786,
+        "f1": 0.45551839464882943,
+        "auc_roc": 0.6740657056700041,
+        "confusion_matrix": {
+          "tn": 4766,
+          "fp": 2255,
+          "fn": 1001,
+          "tp": 1362
+        },
+        "support": {
+          "n": 9384,
+          "positives": 2363,
+          "negatives": 7021
+        }
+      },
+      "sch02_holdout": {
+        "precision": 0.37654247034862826,
+        "recall": 0.5481817389029389,
+        "f1": 0.44643301019139947,
+        "auc_roc": 0.7287776751179107,
+        "confusion_matrix": {
+          "tn": 38112,
+          "fp": 10408,
+          "fn": 5181,
+          "tp": 6286
+        },
+        "support": {
+          "n": 59987,
+          "positives": 11467,
+          "negatives": 48520
+        }
+      }
+    },
+    "logistic_regression": {
+      "coefficients": {
+        "attendance_rate_w1": -0.3511551304563721,
+        "attendance_rate_w2": -0.08568199851451727,
+        "attendance_rate_w3": -0.31543010779992575,
+        "longest_absence_streak": 0.14353348479416486,
+        "absence_episode_count": 0.07450299233959334,
+        "dow_concentration": -0.04365857789977814,
+        "attendance_trend": 0.17694313017413407
+      },
+      "intercept": -0.07896365269654815,
+      "sch01_test": {
+        "precision": 0.3864453665283541,
+        "recall": 0.5911976301311892,
+        "f1": 0.4673803947808632,
+        "auc_roc": 0.6849988996796564,
+        "confusion_matrix": {
+          "tn": 4803,
+          "fp": 2218,
+          "fn": 966,
+          "tp": 1397
+        },
+        "support": {
+          "n": 9384,
+          "positives": 2363,
+          "negatives": 7021
+        }
+      },
+      "sch02_holdout": {
+        "precision": 0.40150198609731874,
+        "recall": 0.5641405773087992,
+        "f1": 0.4691250589216433,
+        "auc_roc": 0.7520004337332454,
+        "confusion_matrix": {
+          "tn": 38877,
+          "fp": 9643,
+          "fn": 4998,
+          "tp": 6469
+        },
+        "support": {
+          "n": 59987,
+          "positives": 11467,
+          "negatives": 48520
+        }
+      }
+    },
+    "rule_based": {
+      "scheme": {
+        "weights": {
+          "consecutive": 0.4,
+          "monthly_rate": 0.3,
+          "day_of_week": 0.15,
+          "trend": 0.15
+        },
+        "consecutive_norm_days": 5.0,
+        "amber_threshold": 0.35,
+        "red_threshold": 0.6,
+        "override_consecutive_absences": 5,
+        "positive_flags": [
+          "amber",
+          "red"
+        ]
+      },
+      "sch01_test": {
+        "precision": 0.42708968883465526,
+        "recall": 0.29623360135421073,
+        "f1": 0.3498250874562719,
+        "auc_roc": 0.6280338598496271,
+        "confusion_matrix": {
+          "tn": 6082,
+          "fp": 939,
+          "fn": 1663,
+          "tp": 700
+        },
+        "support": {
+          "n": 9384,
+          "positives": 2363,
+          "negatives": 7021
+        }
+      },
+      "sch02_holdout": {
+        "precision": 0.44564152791381,
+        "recall": 0.27775355367576526,
+        "f1": 0.34221553669281185,
+        "auc_roc": 0.6715122370577572,
+        "confusion_matrix": {
+          "tn": 44558,
+          "fp": 3962,
+          "fn": 8282,
+          "tp": 3185
+        },
+        "support": {
+          "n": 59987,
+          "positives": 11467,
+          "negatives": 48520
+        }
+      }
+    }
+  }
+}
