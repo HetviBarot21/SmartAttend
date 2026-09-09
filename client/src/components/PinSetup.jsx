@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import { PIN_LENGTH } from '../auth/pin';
+import { CapIcon } from './icons';
 
 /**
  * Offered once, immediately after the first successful online sign-in on a
@@ -41,7 +42,9 @@ export default function PinSetup({ onDone, onSkip }) {
   return (
     <div className="auth">
       <form className="auth__card" onSubmit={handleSubmit}>
+        <div className="auth__logo"><CapIcon size={24} /></div>
         <h1 className="auth__brand">Set an offline PIN</h1>
+        <p className="auth__tagline">Keep working when the session expires</p>
         <p className="auth__help">
           Your sign-in expires after one hour. A {PIN_LENGTH}-digit PIN lets you unlock
           SmartAttend and keep recording attendance when there is no network.

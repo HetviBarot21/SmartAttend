@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useAuth } from '../auth/AuthContext';
 import { MAX_ATTEMPTS, PIN_LENGTH } from '../auth/pin';
+import { CapIcon } from './icons';
 
 function minutesLeft(lockedUntil, now) {
   return Math.max(0, Math.ceil((lockedUntil - now) / 60000));
@@ -59,6 +60,7 @@ export default function PinUnlock() {
     return (
       <div className="auth">
         <div className="auth__card">
+          <div className="auth__logo"><CapIcon size={24} /></div>
           <h1 className="auth__brand">Session expired</h1>
           <p className="auth__help">
             Your sign-in has expired and no offline PIN is set on this device.
@@ -73,6 +75,7 @@ export default function PinUnlock() {
   return (
     <div className="auth">
       <form className="auth__card" onSubmit={handleSubmit}>
+        <div className="auth__logo"><CapIcon size={24} /></div>
         <h1 className="auth__brand">Session expired</h1>
         <p className="auth__tagline">{session?.displayName ?? session?.username}</p>
 
@@ -112,7 +115,7 @@ export default function PinUnlock() {
             disabled={busy || locked}
             aria-describedby="pin-help"
           />
-          <span id="pin-help" className="roll__locked">{PIN_LENGTH} digits</span>
+          <span id="pin-help" className="field__hint">{PIN_LENGTH} digits</span>
         </div>
 
         <button className="btn" type="submit" disabled={busy || locked || pin.length !== PIN_LENGTH}>

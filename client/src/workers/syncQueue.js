@@ -19,6 +19,8 @@ import { BackgroundSyncPlugin } from 'workbox-background-sync';
 import { registerRoute } from 'workbox-routing';
 import { NetworkOnly } from 'workbox-strategies';
 
+import { drainSyncQueue, DRAIN_SYNC_TAG } from '../services/syncService';
+
 /** IndexedDB store name for the queued requests (visible in DevTools > Application). */
 export const SYNC_QUEUE_NAME = 'smartattend-sync-queue';
 
@@ -38,10 +40,32 @@ async function broadcast(message) {
 }
 
 /**
+ * Drain the durable Dexie `syncQueue` table (via src/services/syncService.js)
+ * and tell open tabs how many records settled so the "pending" badge refreshes.
+ * Best-effort: failed rows carry their own backoff `nextAttemptAt`, and the
+ * page's `online` listener plus the dedicated `sync` tag reschedule the retry -
+ * so a partial drain here does not need to throw.
+ */
+async function drainDurableQueue() {
+  try {
+    const summary = await drainSyncQueue();
+    if (summary.synced > 0) await broadcast({ type: 'SYNC_REPLAYED', count: summary.synced });
+    return summary;
+  } catch (err) {
+    console.warn('[sync] durable queue drain failed', err);
+    return null;
+  }
+}
+
+/**
  * Custom replay loop: drain the queue oldest-first, stop and re-queue on the
  * first failure so ordering is preserved and the browser reschedules with its
  * own backoff. Notifies open tabs when anything was flushed so the UI can
  * refresh the "pending" badge.
+ *
+ * The transport queue only ever holds requests that were mid-flight when the
+ * network dropped; once it is clear we also drain the durable Dexie backlog,
+ * since reaching this point means connectivity is back.
  */
 async function replayQueue({ queue }) {
   let entry;
@@ -60,6 +84,25 @@ async function replayQueue({ queue }) {
     }
   }
   if (replayed > 0) await broadcast({ type: 'SYNC_REPLAYED', count: replayed });
+
+  await drainDurableQueue();
+}
+
+/**
+ * Register a dedicated `sync` listener for the durable-queue drain. Workbox's
+ * BackgroundSyncPlugin only registers a sync event when a request has actually
+ * failed into its queue, so a device that recorded attendance while offline but
+ * never had a request fail mid-flight would otherwise never replay. The page
+ * registers `DRAIN_SYNC_TAG` (see requestBackgroundSync) to cover that case.
+ *
+ * Call once from sw.js.
+ */
+export function registerDurableQueueSync() {
+  self.addEventListener('sync', (event) => {
+    if (event.tag === DRAIN_SYNC_TAG) {
+      event.waitUntil(drainDurableQueue());
+    }
+  });
 }
 
 export const backgroundSyncPlugin = new BackgroundSyncPlugin(SYNC_QUEUE_NAME, {

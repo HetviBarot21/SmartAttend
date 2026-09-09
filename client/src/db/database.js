@@ -149,6 +149,10 @@ export async function addAttendanceBatch(events) {
   return { saved, duplicates, failed };
 }
 
+export async function getStudentById(studentId) {
+  return db.students.where('studentId').equals(studentId).first();
+}
+
 export async function getStudentsByClass(classGroupId) {
   const students = await db.students.where('classGroupId').equals(classGroupId).toArray();
   return students.sort((a, b) => a.fullName.localeCompare(b.fullName));
@@ -166,12 +170,34 @@ export async function getTodaysAttendance(classGroupId) {
   return getAttendanceForDate(classGroupId, todayISO());
 }
 
+/**
+ * Records not yet confirmed by the server: `pending` (never sent) plus `failed`
+ * (sent, will retry on backoff). Both are "awaiting sync" from the teacher's
+ * point of view, so the badge counts them together.
+ */
 export async function countPendingSync() {
-  return db.syncQueue.where('status').equals('pending').count();
+  return db.syncQueue.where('status').anyOf('pending', 'failed').count();
 }
 
 /** Every record for one student, oldest first - used by the Sprint 4 profile view. */
 export async function getStudentHistory(studentId) {
   const rows = await db.attendanceEvents.where('studentId').equals(studentId).toArray();
   return rows.sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/**
+ * Every attendance record for a class since `sinceISO` (inclusive), oldest
+ * first. Backs the Heatmap grid and the Alerts / Profile risk scoring, which
+ * need weeks of history rather than a single day.
+ */
+export async function getClassHistory(classGroupId, sinceISO) {
+  const students = await getStudentsByClass(classGroupId);
+  const ids = new Set(students.map((s) => s.studentId));
+  const rows = await db.attendanceEvents
+    .where('date')
+    .aboveOrEqual(sinceISO)
+    .toArray();
+  return rows
+    .filter((r) => ids.has(r.studentId))
+    .sort((a, b) => a.date.localeCompare(b.date));
 }

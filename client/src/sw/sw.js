@@ -14,7 +14,8 @@ import { registerRoute } from 'workbox-routing';
 import { NetworkFirst } from 'workbox-strategies';
 import { ExpirationPlugin } from 'workbox-expiration';
 
-import { registerSyncQueue } from '../workers/syncQueue';
+import { registerSyncQueue, registerDurableQueueSync } from '../workers/syncQueue';
+import { drainSyncQueue } from '../services/syncService';
 
 // `registerType: 'autoUpdate'` expects the new SW to take over immediately.
 self.skipWaiting();
@@ -38,6 +39,9 @@ registerRoute(
 
 // Outbound attendance sync: failed POSTs are queued and replayed on reconnect.
 registerSyncQueue();
+// ...and a dedicated Background Sync tag that drains the durable Dexie backlog
+// even when no request ever failed at the transport layer.
+registerDurableQueueSync();
 
 // Let the app trigger an immediate replay attempt (e.g. when the online event
 // fires in the page) by posting { type: 'REPLAY_SYNC' } to the SW.
@@ -47,6 +51,7 @@ self.addEventListener('message', (event) => {
       (async () => {
         const { backgroundSyncPlugin } = await import('../workers/syncQueue');
         await backgroundSyncPlugin.queue.replayRequests().catch(() => {});
+        await drainSyncQueue().catch(() => {});
       })(),
     );
   }

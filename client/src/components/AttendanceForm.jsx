@@ -1,18 +1,23 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   addAttendanceBatch,
   getStudentsByClass,
   getAttendanceForDate,
   todayISO,
-  ATTENDANCE_STATUSES
 } from '../db/database';
-import { seedDatabase } from '../db/seedData';
+import { seedDatabase, seedDemoHistory } from '../db/seedData';
 import { useAuth } from '../auth/AuthContext';
 import { formatLongDate } from '../lib/attendanceSummary';
+import Avatar from './Avatar';
+import { SyncIcon, CheckCircleIcon } from './icons';
 
-const LABELS = { present: 'Present', absent: 'Absent', late: 'Late' };
+const STATUSES = [
+  { code: 'present', short: 'P' },
+  { code: 'absent', short: 'A' },
+  { code: 'late', short: 'L' },
+];
 
-export default function AttendanceForm({ classGroupId, onRecordsChanged }) {
+export default function AttendanceForm({ classGroupId, pending = 0, onRecordsChanged, onOpenProfile }) {
   const { user } = useAuth();
   const date = todayISO();
 
@@ -26,9 +31,10 @@ export default function AttendanceForm({ classGroupId, onRecordsChanged }) {
 
   const load = useCallback(async () => {
     await seedDatabase();
+    await seedDemoHistory();
     const [roll, todays] = await Promise.all([
       getStudentsByClass(classGroupId),
-      getAttendanceForDate(classGroupId, date)
+      getAttendanceForDate(classGroupId, date),
     ]);
     setStudents(roll);
     setRecorded(Object.fromEntries(todays.map((r) => [r.studentId, r.status])));
@@ -37,18 +43,25 @@ export default function AttendanceForm({ classGroupId, onRecordsChanged }) {
 
   useEffect(() => { load(); }, [load]);
 
-  const pending = students.filter((s) => !(s.studentId in recorded));
-  const unmarked = pending.filter((s) => !draft[s.studentId]);
+  const draftedCount = useMemo(
+    () => students.filter((s) => !(s.studentId in recorded) && draft[s.studentId]).length,
+    [students, recorded, draft]
+  );
+  const markedCount = Object.keys(recorded).length + draftedCount;
+  const total = students.length;
+  const pct = total === 0 ? 0 : Math.round((markedCount / total) * 100);
 
   function choose(studentId, status) {
-    setDraft((prev) => ({ ...prev, [studentId]: status }));
+    setDraft((prev) => ({ ...prev, [studentId]: prev[studentId] === status ? undefined : status }));
     setResult(null);
   }
 
-  function markAllPresent() {
+  function markRemainingPresent() {
     setDraft((prev) => {
       const next = { ...prev };
-      for (const s of pending) if (!next[s.studentId]) next[s.studentId] = 'present';
+      for (const s of students) {
+        if (!(s.studentId in recorded) && !next[s.studentId]) next[s.studentId] = 'present';
+      }
       return next;
     });
     setResult(null);
@@ -58,13 +71,17 @@ export default function AttendanceForm({ classGroupId, onRecordsChanged }) {
     setError(null);
     setSaving(true);
     try {
-      const events = pending.map((s) => ({
-        studentId: s.studentId,
-        date,
-        status: draft[s.studentId],
-        captureMethod: 'manual',
-        recordedBy: user?.username ?? null
-      }));
+      const events = students
+        .filter((s) => !(s.studentId in recorded) && draft[s.studentId])
+        .map((s) => ({
+          studentId: s.studentId,
+          date,
+          status: draft[s.studentId],
+          captureMethod: 'manual',
+          recordedBy: user?.username ?? null,
+        }));
+
+      if (events.length === 0) { setSaving(false); return; }
 
       const outcome = await addAttendanceBatch(events);
       setResult(outcome);
@@ -78,69 +95,43 @@ export default function AttendanceForm({ classGroupId, onRecordsChanged }) {
     }
   }
 
-  /**
-   * Demo only: replays today's roll call so the unique index rejects every
-   * record. Proves duplicate prevention is enforced by IndexedDB rather than
-   * by the form disabling its own buttons.
-   */
-  async function replayForDuplicateCheck() {
-    setError(null);
-    setSaving(true);
-    try {
-      const events = students.map((s) => ({
-        studentId: s.studentId,
-        date,
-        status: recorded[s.studentId] ?? 'present',
-        captureMethod: 'manual',
-        recordedBy: user?.username ?? null
-      }));
-      setResult(await addAttendanceBatch(events));
-      await load();
-      onRecordsChanged?.();
-    } finally {
-      setSaving(false);
-    }
-  }
-
   if (loading) return <p className="empty">Loading class list…</p>;
 
-  const allRecorded = pending.length === 0;
+  const allDone = total > 0 && Object.keys(recorded).length === total;
 
   return (
-    <section>
-      <p className="card__hint" style={{ marginTop: 0 }}>{formatLongDate(date)}</p>
+    <>
+      <div className="roll-head">
+        <div className="roll-head__row">
+          <span className="card__hint" style={{ margin: 0 }}>{formatLongDate(date)}</span>
+          <span className="roll-head__count">{markedCount} / {total} marked</span>
+        </div>
+        <div className="progress">
+          <div className="progress__fill" style={{ width: `${pct}%` }} />
+        </div>
+      </div>
 
       {error && <div className="notice notice--err" role="alert">{error}</div>}
-
-      {result && (
-        <div
-          className={`notice ${result.saved.length > 0 ? 'notice--ok' : 'notice--warn'}`}
-          role="status"
-        >
-          {result.saved.length > 0 && (
-            <>Saved {result.saved.length} record(s) to this device. They will sync when there is a connection.</>
-          )}
-          {result.duplicates.length > 0 && (
-            <>
-              {result.saved.length > 0 ? ' ' : ''}
-              {result.duplicates.length} record(s) rejected — attendance was already
-              recorded for those students today.
-            </>
-          )}
-          {result.failed.length > 0 && <> {result.failed.length} record(s) failed to save.</>}
-        </div>
-      )}
-
-      {allRecorded && !result && (
+      {result && result.saved.length > 0 && (
         <div className="notice notice--ok" role="status">
-          Attendance is complete for today. Each student can only be recorded once per day.
+          Saved {result.saved.length} record(s) to this device. They sync when there is a connection.
+        </div>
+      )}
+      {result && result.duplicates.length > 0 && (
+        <div className="notice notice--warn" role="status">
+          {result.duplicates.length} already recorded today and were skipped.
+        </div>
+      )}
+      {allDone && !result && (
+        <div className="notice notice--ok" role="status">
+          Attendance is complete for today. Each student can be recorded once per day.
         </div>
       )}
 
-      {!allRecorded && (
+      {!allDone && (
         <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
-          <button className="btn btn--ghost btn--small" type="button" onClick={markAllPresent}>
-            Mark all present
+          <button type="button" className="btn btn--ghost btn--sm" onClick={markRemainingPresent}>
+            Mark rest present
           </button>
         </div>
       )}
@@ -149,32 +140,34 @@ export default function AttendanceForm({ classGroupId, onRecordsChanged }) {
         {students.map((student) => {
           const locked = student.studentId in recorded;
           const value = locked ? recorded[student.studentId] : draft[student.studentId];
-
           return (
-            <div key={student.studentId} className={`roll__row${locked ? ' roll__row--recorded' : ''}`}>
-              <div className="roll__who">
-                <span className="roll__name">{student.fullName}</span>
-                <span className="roll__adm">{student.admissionNo}</span>
-              </div>
+            <div key={student.studentId} className={`roll-row${value ? ' roll-row--marked' : ''}`}>
+              <Avatar name={student.fullName} size="sm" />
+              <button
+                type="button"
+                className="roll-row__who"
+                onClick={() => onOpenProfile?.(student.studentId)}
+              >
+                <span className="roll-row__name">{student.fullName}</span>
+                <span className="roll-row__id">ID: {student.admissionNo}</span>
+              </button>
 
               {locked ? (
-                <div className="roll__choices">
-                  <span className={`pill pill--${value}`}>{LABELS[value]}</span>
-                  <span className="roll__locked">recorded</span>
-                </div>
+                <span className={`pill pill--${value}`}>{value}</span>
               ) : (
-                <div className="roll__choices" role="group" aria-label={`Attendance for ${student.fullName}`}>
-                  {ATTENDANCE_STATUSES.map((status) => (
+                <div className="pal" role="group" aria-label={`Attendance for ${student.fullName}`}>
+                  {STATUSES.map(({ code, short }) => (
                     <button
-                      key={status}
+                      key={code}
                       type="button"
-                      className="choice"
-                      data-status={status}
-                      aria-pressed={value === status}
-                      onClick={() => choose(student.studentId, status)}
+                      className="pal__btn"
+                      data-status={code}
+                      aria-pressed={value === code}
+                      aria-label={code}
+                      onClick={() => choose(student.studentId, code)}
                       disabled={saving}
                     >
-                      {LABELS[status]}
+                      {short}
                     </button>
                   ))}
                 </div>
@@ -184,30 +177,24 @@ export default function AttendanceForm({ classGroupId, onRecordsChanged }) {
         })}
       </div>
 
-      {!allRecorded ? (
-        <div className="submitbar">
-          <button
-            className="btn"
-            type="button"
-            onClick={handleSubmit}
-            disabled={saving || unmarked.length > 0}
-          >
-            {saving
-              ? 'Saving…'
-              : unmarked.length > 0
-                ? `${unmarked.length} student(s) still unmarked`
-                : `Submit attendance (${pending.length})`}
-          </button>
+      {/* keeps the last row clear of the fixed submit bar */}
+      <div aria-hidden="true" style={{ height: 132 }} />
+
+      <div className="rollbar">
+        <div className="rollbar__meta">
+          <SyncIcon size={14} />
+          {pending > 0 ? `${pending} pending sync${pending === 1 ? '' : 's'}` : 'All records synced'}
         </div>
-      ) : (
-        import.meta.env.DEV && (
-          <div className="submitbar">
-            <button className="btn btn--ghost" type="button" onClick={replayForDuplicateCheck} disabled={saving}>
-              Re-submit today's roll call (duplicate check)
-            </button>
-          </div>
-        )
-      )}
-    </section>
+        <button
+          type="button"
+          className="btn"
+          onClick={handleSubmit}
+          disabled={saving || draftedCount === 0}
+        >
+          <CheckCircleIcon size={18} />
+          {saving ? 'Saving…' : draftedCount > 0 ? `Submit Attendance (${draftedCount})` : 'Submit Attendance'}
+        </button>
+      </div>
+    </>
   );
 }

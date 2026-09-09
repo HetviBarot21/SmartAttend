@@ -17,3 +17,9 @@ server/data/
 *.db
 *.db-shm
 *.db-wal
+
+# Large ML training data (raw xlsx) - kept out of git
+SCH-*.xlsx
+
+# Claude Code worktrees / job scratch
+.claude/

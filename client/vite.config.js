@@ -8,6 +8,17 @@ export default defineConfig({
   define: {
     global: 'globalThis',
   },
+  // Dev-only: forward every /api request to the Tier 2 Express server so the
+  // PWA's sync/data calls (e.g. syncService.js -> POST /api/sync) reach it
+  // instead of 404ing against the Vite dev server.
+  server: {
+    proxy: {
+      '/api': {
+        target: 'http://localhost:3000',
+        changeOrigin: true,
+      },
+    },
+  },
   plugins: [
     react(),
     VitePWA({
@@ -29,8 +40,8 @@ export default defineConfig({
         name: 'SmartAttend AI',
         short_name: 'SmartAttend',
         description: 'Offline-first student attendance management system',
-        theme_color: '#064F60',
-        background_color: '#064F60',
+        theme_color: '#f6f7fb',
+        background_color: '#f6f7fb',
         display: 'standalone',
         start_url: '/',
         icons: [

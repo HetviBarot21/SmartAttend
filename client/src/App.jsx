@@ -4,23 +4,29 @@ import LoginScreen from './components/LoginScreen';
 import PinUnlock from './components/PinUnlock';
 import PinSetup from './components/PinSetup';
 import AttendanceForm from './components/AttendanceForm';
-import Dashboard from './components/Dashboard';
+import Heatmap from './components/Heatmap';
+import Alerts from './components/Alerts';
+import StudentProfile from './components/StudentProfile';
+import BottomNav from './components/BottomNav';
+import TopBar from './components/TopBar';
+import AccountSheet from './components/AccountSheet';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { countPendingSync } from './db/database';
+import { requestBackgroundSync } from './services/syncService';
 import { DEMO_CLASS, DEMO_CLASS_ID } from './db/seedData';
 
-const TABS = [
-  { id: 'roll', label: 'Roll call' },
-  { id: 'dashboard', label: 'Dashboard' }
-];
+const CLASS_NAME = `${DEMO_CLASS.grade}${DEMO_CLASS.stream}`; // "Form 3B"
+const TITLES = { attendance: CLASS_NAME, heatmap: 'Heatmap', alerts: 'Alerts' };
 
 function TeacherApp() {
   const { user, session, signOut, simulateExpiry } = useAuth();
   const online = useOnlineStatus();
 
-  const [tab, setTab] = useState('roll');
+  const [tab, setTab] = useState('attendance');
+  const [profileId, setProfileId] = useState(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [pending, setPending] = useState(0);
+  const [sheetOpen, setSheetOpen] = useState(false);
 
   const refreshPending = useCallback(async () => {
     setPending(await countPendingSync());
@@ -30,65 +36,69 @@ function TeacherApp() {
 
   const handleRecordsChanged = useCallback(() => {
     setRefreshKey((k) => k + 1);
+    requestBackgroundSync().catch(() => {});
   }, []);
+
+  const openProfile = useCallback((id) => {
+    setProfileId(id);
+    window.scrollTo(0, 0);
+  }, []);
+
+  const goTab = useCallback((next) => {
+    setProfileId(null);
+    setTab(next);
+    window.scrollTo(0, 0);
+  }, []);
+
+  const account = (
+    <TopBar
+      title={profileId ? 'Profile' : TITLES[tab]}
+      onBack={profileId ? () => setProfileId(null) : undefined}
+      online={online}
+      onAccount={() => setSheetOpen(true)}
+    />
+  );
+
+  let body;
+  if (profileId) {
+    body = <StudentProfile studentId={profileId} className={CLASS_NAME} />;
+  } else if (tab === 'heatmap') {
+    body = <Heatmap classGroupId={DEMO_CLASS_ID} />;
+  } else if (tab === 'alerts') {
+    body = <Alerts classGroupId={DEMO_CLASS_ID} className={CLASS_NAME} onOpenProfile={openProfile} />;
+  } else {
+    body = (
+      <AttendanceForm
+        classGroupId={DEMO_CLASS_ID}
+        pending={pending}
+        onRecordsChanged={handleRecordsChanged}
+        onOpenProfile={openProfile}
+      />
+    );
+  }
 
   return (
     <div className="app">
-      <header className="app__header">
-        <div className="app__title-row">
-          <div>
-            <h1 className="app__title">SmartAttend AI</h1>
-            <p className="app__subtitle">
-              {DEMO_CLASS.grade} {DEMO_CLASS.stream} · {user?.displayName}
-            </p>
-          </div>
-          <button className="app__user" type="button" onClick={signOut}>Sign out</button>
-        </div>
+      {account}
+      <div className="app__scroll">{body}</div>
 
-        <div className="app__badges">
-          <span className={`badge ${online ? 'badge--online' : 'badge--offline'}`}>
-            {online ? 'Online' : 'Offline — saving to this device'}
-          </span>
-          {pending > 0 && (
-            <span className="badge badge--sync">{pending} record(s) awaiting sync</span>
-          )}
-          {session?.pinVerified && (
-            <span className="badge badge--warn">PIN session</span>
-          )}
-        </div>
-      </header>
+      {!profileId && <BottomNav active={tab} onChange={goTab} />}
 
-      <nav className="tabs" role="tablist" aria-label="Views">
-        {TABS.map((t) => (
-          <button
-            key={t.id}
-            className="tabs__tab"
-            role="tab"
-            aria-selected={tab === t.id}
-            onClick={() => setTab(t.id)}
-          >
-            {t.label}
-          </button>
-        ))}
-      </nav>
-
-      <main className="app__main">
-        {tab === 'roll' ? (
-          <AttendanceForm classGroupId={DEMO_CLASS_ID} onRecordsChanged={handleRecordsChanged} />
-        ) : (
-          <Dashboard classGroupId={DEMO_CLASS_ID} refreshKey={refreshKey} />
-        )}
-
-        {import.meta.env.DEV && (
-          <div className="devnote">
-            <strong>Demo controls.</strong>{' '}
-            <button className="linkbtn" type="button" onClick={simulateExpiry}>
-              Simulate session expiry
-            </button>{' '}
-            — expires the token so the offline PIN unlock screen appears.
-          </div>
-        )}
-      </main>
+      {sheetOpen && (
+        <AccountSheet
+          user={user}
+          online={online}
+          pending={pending}
+          pinSession={Boolean(session?.pinVerified)}
+          onSignOut={() => { setSheetOpen(false); signOut(); }}
+          onSimulateExpiry={
+            import.meta.env.DEV
+              ? () => { setSheetOpen(false); simulateExpiry(); }
+              : undefined
+          }
+          onClose={() => setSheetOpen(false)}
+        />
+      )}
     </div>
   );
 }
@@ -101,8 +111,6 @@ function AuthGate() {
   if (status === AUTH_STATUS.SIGNED_OUT) return <LoginScreen />;
   if (status === AUTH_STATUS.LOCKED) return <PinUnlock />;
 
-  // Offered once per sign-in. Skipping is allowed but leaves the teacher unable
-  // to recover an expired session while offline, which PinUnlock explains.
   if (!pinState.enrolled && !pinSetupSkipped) {
     return <PinSetup onDone={() => setPinSetupSkipped(true)} onSkip={() => setPinSetupSkipped(true)} />;
   }
