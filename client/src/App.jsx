@@ -4,6 +4,8 @@ import LoginScreen from './components/LoginScreen';
 import PinUnlock from './components/PinUnlock';
 import PinSetup from './components/PinSetup';
 import RosterManager from './components/RosterManager';
+import SetupWizard from './components/SetupWizard';
+import ClassSwitcher from './components/ClassSwitcher';
 import AttendanceForm from './components/AttendanceForm';
 import Heatmap from './components/Heatmap';
 import Alerts from './components/Alerts';
@@ -12,12 +14,18 @@ import BottomNav from './components/BottomNav';
 import TopBar from './components/TopBar';
 import AccountSheet from './components/AccountSheet';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
-import { countPendingSync } from './db/database';
+import { countPendingSync, getClasses, classLabel } from './db/database';
 import { requestBackgroundSync } from './services/syncService';
-import { DEMO_CLASS, DEMO_CLASS_ID } from './db/seedData';
 
-const CLASS_NAME = `${DEMO_CLASS.grade}${DEMO_CLASS.stream}`; // "Form 3B"
-const TITLES = { attendance: CLASS_NAME, heatmap: 'Heatmap', alerts: 'Alerts' };
+const STATIC_TITLES = { heatmap: 'Heatmap', alerts: 'Alerts' };
+
+const ACTIVE_CLASS_KEY = 'smartattend:activeClass';
+const readActiveClass = () => {
+  try { return localStorage.getItem(ACTIVE_CLASS_KEY); } catch { return null; }
+};
+const writeActiveClass = (id) => {
+  try { localStorage.setItem(ACTIVE_CLASS_KEY, id); } catch { /* private mode */ }
+};
 
 function TeacherApp() {
   const { user, session, pinState, signOut, simulateExpiry } = useAuth();
@@ -30,55 +38,60 @@ function TeacherApp() {
   const [sheetOpen, setSheetOpen] = useState(false);
   const [pinSetupOpen, setPinSetupOpen] = useState(false);
   const [rosterOpen, setRosterOpen] = useState(false);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+
+  const [classes, setClasses] = useState(null); // null = still loading
+  const [activeClassId, setActiveClassId] = useState(null);
+
+  const loadClasses = useCallback(async () => {
+    const list = await getClasses();
+    setClasses(list);
+    setActiveClassId((current) => {
+      const stored = current ?? readActiveClass();
+      const stillValid = list.some((c) => c.classGroupId === stored);
+      return stillValid ? stored : (list[0]?.classGroupId ?? null);
+    });
+  }, []);
+
+  useEffect(() => { loadClasses(); }, [loadClasses, refreshKey]);
 
   const refreshPending = useCallback(async () => {
     setPending(await countPendingSync());
   }, []);
-
   useEffect(() => { refreshPending(); }, [refreshPending, refreshKey]);
 
+  const bump = useCallback(() => setRefreshKey((k) => k + 1), []);
+
   const handleRecordsChanged = useCallback(() => {
-    setRefreshKey((k) => k + 1);
+    bump();
     requestBackgroundSync().catch(() => {});
-  }, []);
+  }, [bump]);
 
-  const openProfile = useCallback((id) => {
-    setProfileId(id);
-    window.scrollTo(0, 0);
-  }, []);
-
+  const openProfile = useCallback((id) => { setProfileId(id); window.scrollTo(0, 0); }, []);
   const goTab = useCallback((next) => {
     setProfileId(null);
     setTab(next);
     window.scrollTo(0, 0);
   }, []);
 
-  const account = (
-    <TopBar
-      title={profileId ? 'Profile' : TITLES[tab]}
-      onBack={profileId ? () => setProfileId(null) : undefined}
-      online={online}
-      onAccount={() => setSheetOpen(true)}
-    />
-  );
+  const pickClass = useCallback((id) => {
+    setActiveClassId(id);
+    writeActiveClass(id);
+    setSwitcherOpen(false);
+    setProfileId(null);
+    bump();
+  }, [bump]);
 
-  let body;
-  if (profileId) {
-    body = <StudentProfile studentId={profileId} className={CLASS_NAME} />;
-  } else if (tab === 'heatmap') {
-    body = <Heatmap classGroupId={DEMO_CLASS_ID} />;
-  } else if (tab === 'alerts') {
-    body = <Alerts classGroupId={DEMO_CLASS_ID} className={CLASS_NAME} onOpenProfile={openProfile} />;
-  } else {
-    body = (
-      <AttendanceForm
-        classGroupId={DEMO_CLASS_ID}
-        pending={pending}
-        onRecordsChanged={handleRecordsChanged}
-        onOpenProfile={openProfile}
-      />
-    );
+  // ----- gates that replace the whole screen ----------------------------- //
+
+  if (classes === null) return <div className="centered">Loading classes…</div>;
+
+  if (classes.length === 0) {
+    return <SetupWizard onDone={(id) => { writeActiveClass(id); bump(); }} />;
   }
+
+  const activeClass = classes.find((c) => c.classGroupId === activeClassId) ?? classes[0];
+  const activeLabel = classLabel(activeClass);
 
   if (pinSetupOpen) {
     return (
@@ -94,19 +107,55 @@ function TeacherApp() {
   if (rosterOpen) {
     return (
       <RosterManager
-        classGroupId={DEMO_CLASS_ID}
-        className={CLASS_NAME}
-        onClose={() => { setRosterOpen(false); setRefreshKey((k) => k + 1); }}
+        classGroupId={activeClassId}
+        className={classLabel(activeClass)}
+        onClose={() => { setRosterOpen(false); bump(); }}
       />
     );
   }
 
+  let body;
+  if (profileId) {
+    body = <StudentProfile studentId={profileId} className={activeLabel} />;
+  } else if (tab === 'heatmap') {
+    body = <Heatmap key={activeClassId} classGroupId={activeClassId} />;
+  } else if (tab === 'alerts') {
+    body = <Alerts key={activeClassId} classGroupId={activeClassId} className={activeLabel} onOpenProfile={openProfile} />;
+  } else {
+    body = (
+      <AttendanceForm
+        key={activeClassId}
+        classGroupId={activeClassId}
+        pending={pending}
+        onRecordsChanged={handleRecordsChanged}
+        onOpenProfile={openProfile}
+      />
+    );
+  }
+
+  const showSwitcher = !profileId && tab === 'attendance';
+
   return (
     <div className="app">
-      {account}
+      <TopBar
+        title={profileId ? 'Profile' : (tab === 'attendance' ? activeLabel : STATIC_TITLES[tab])}
+        onBack={profileId ? () => setProfileId(null) : undefined}
+        onTitleClick={showSwitcher ? () => setSwitcherOpen(true) : undefined}
+        online={online}
+        onAccount={() => setSheetOpen(true)}
+      />
       <div className="app__scroll">{body}</div>
 
       {!profileId && <BottomNav active={tab} onChange={goTab} />}
+
+      {switcherOpen && (
+        <ClassSwitcher
+          activeClassId={activeClassId}
+          onPick={pickClass}
+          onManageRoster={() => { setSwitcherOpen(false); setRosterOpen(true); }}
+          onClose={() => setSwitcherOpen(false)}
+        />
+      )}
 
       {sheetOpen && (
         <AccountSheet

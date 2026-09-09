@@ -11,6 +11,14 @@ import {
   addStudent,
   updateStudent,
   removeStudent,
+  setStudentCard,
+  normalizeCardUid,
+  getClasses,
+  getClassById,
+  createClass,
+  updateClass,
+  archiveClass,
+  classLabel,
   todayISO
 } from './database';
 
@@ -278,6 +286,75 @@ describe('roster management', () => {
     const s = await addStudent({ classGroupId: CLASS, fullName: 'Old Name', admissionNo: '1' });
     const updated = await updateStudent(s.studentId, { fullName: '  New Name  ', admissionNo: '' });
     expect(updated).toMatchObject({ fullName: 'New Name', admissionNo: null });
+  });
+});
+
+describe('RFID card assignment', () => {
+  const CLASS = 'class-x';
+
+  it('normalizes a card UID (trim, strip spaces, upper-case)', () => {
+    expect(normalizeCardUid('  04 a1 b2 c3 ')).toBe('04A1B2C3');
+    expect(normalizeCardUid('')).toBeNull();
+    expect(normalizeCardUid(null)).toBeNull();
+  });
+
+  it('stores a card on add and rejects a duplicate card on another student', async () => {
+    await addStudent({ classGroupId: CLASS, fullName: 'A', cardUid: '04a1b2c3' });
+    const a = (await getStudentsByClass(CLASS))[0];
+    expect(a.cardUid).toBe('04A1B2C3');
+
+    await expect(
+      addStudent({ classGroupId: CLASS, fullName: 'B', cardUid: '04 A1 B2 C3' }),
+    ).rejects.toThrow(/already assigned to A/);
+  });
+
+  it('setStudentCard assigns, reassigns, and clears', async () => {
+    const s = await addStudent({ classGroupId: CLASS, fullName: 'C' });
+    await setStudentCard(s.studentId, 'AABB');
+    expect((await getStudentsByClass(CLASS))[0].cardUid).toBe('AABB');
+
+    await setStudentCard(s.studentId, ''); // clear
+    expect((await getStudentsByClass(CLASS))[0].cardUid).toBeNull();
+  });
+});
+
+describe('classes', () => {
+  it('createClass derives a name from grade + stream and defaults the year', async () => {
+    const cls = await createClass({ grade: 'Form 3', stream: 'B' });
+    expect(cls.classGroupId).toMatch(/^class-/);
+    expect(cls).toMatchObject({ name: 'Form 3 B', active: true });
+    expect(cls.academicYear).toBe(new Date().getFullYear());
+    expect(classLabel(cls)).toBe('Form 3 B');
+  });
+
+  it('requires something to name the class', async () => {
+    await expect(createClass({})).rejects.toThrow(/name/i);
+  });
+
+  it('getClasses lists newest first and hides archived', async () => {
+    const a = await createClass({ name: 'Alpha' });
+    await new Promise((r) => setTimeout(r, 2));
+    const b = await createClass({ name: 'Beta' });
+
+    let list = await getClasses();
+    expect(list.map((c) => c.name)).toEqual(['Beta', 'Alpha']);
+
+    await archiveClass(b.classGroupId); // empty -> hard delete
+    list = await getClasses();
+    expect(list.map((c) => c.name)).toEqual(['Alpha']);
+
+    await updateClass(a.classGroupId, { name: 'Alpha Renamed' });
+    expect((await getClassById(a.classGroupId)).name).toBe('Alpha Renamed');
+  });
+
+  it('archiveClass soft-deletes a class that has students', async () => {
+    const cls = await createClass({ name: 'Has Students' });
+    await addStudent({ classGroupId: cls.classGroupId, fullName: 'Kid' });
+
+    const res = await archiveClass(cls.classGroupId);
+    expect(res).toEqual({ archived: true, deleted: false });
+    expect(await getClasses()).toEqual([]);
+    expect((await getClasses({ includeArchived: true })).length).toBe(1);
   });
 });
 

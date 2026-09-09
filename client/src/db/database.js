@@ -258,6 +258,116 @@ export async function getStudentById(studentId) {
   return db.students.where('studentId').equals(studentId).first();
 }
 
+// --------------------------------------------------------------------------- //
+// Classes                                                                     //
+//                                                                             //
+// A device can hold several class groups (a teacher taking two streams). The  //
+// first is created in the setup wizard; more are added from the class         //
+// switcher. `schoolId` is a plain string here (the server owns the `schools`  //
+// table); the PWA does not ask the teacher about the school in v1.            //
+// --------------------------------------------------------------------------- //
+
+export const LOCAL_SCHOOL_ID = 'school-local-001';
+
+/** Every class on this device, newest first. Archived classes are excluded unless asked for. */
+export async function getClasses({ includeArchived = false } = {}) {
+  const rows = await db.classGroups.toArray();
+  return rows
+    .filter((c) => includeArchived || c.active !== false)
+    .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
+}
+
+export async function getClassById(classGroupId) {
+  return db.classGroups.where('classGroupId').equals(classGroupId).first();
+}
+
+/** Human label for a class: an explicit name, else "<grade> <stream>". */
+export function classLabel(cls) {
+  if (!cls) return '';
+  if (cls.name) return cls.name;
+  return [cls.grade, cls.stream].filter(Boolean).join(' ').trim() || 'Class';
+}
+
+/**
+ * Create a class group (setup wizard / "New class").
+ * @param {{grade?:string, stream?:string, academicYear?:number, name?:string, schoolId?:string}} input
+ */
+export async function createClass(input = {}) {
+  const grade = String(input.grade ?? '').trim();
+  const stream = String(input.stream ?? '').trim();
+  const name = String(input.name ?? '').trim() || [grade, stream].filter(Boolean).join(' ').trim();
+
+  if (!name) throw new Error('Give the class a name, or a grade and stream');
+
+  const classGroupId = `class-${newId()}`;
+  const now = new Date().toISOString();
+  const record = {
+    classGroupId,
+    schoolId: input.schoolId || LOCAL_SCHOOL_ID,
+    grade: grade || null,
+    stream: stream || null,
+    name,
+    academicYear: input.academicYear ?? new Date().getFullYear(),
+    active: true,
+    createdAt: now,
+  };
+
+  await db.transaction('rw', db.classGroups, db.auditLog, async () => {
+    await db.classGroups.add(record);
+    await db.auditLog.add({
+      action: 'class.created', actorId: null, recordId: classGroupId, timestamp: now,
+      detail: JSON.stringify({ name, grade, stream }),
+    });
+  });
+
+  return record;
+}
+
+export async function updateClass(classGroupId, patch = {}) {
+  const cls = await getClassById(classGroupId);
+  if (!cls) throw new Error(`Class ${classGroupId} not found`);
+
+  const clean = {};
+  if (patch.grade !== undefined) clean.grade = String(patch.grade ?? '').trim() || null;
+  if (patch.stream !== undefined) clean.stream = String(patch.stream ?? '').trim() || null;
+  if (patch.name !== undefined) clean.name = String(patch.name ?? '').trim() || classLabel({ ...cls, ...clean });
+  if (patch.academicYear !== undefined) clean.academicYear = patch.academicYear;
+  if (typeof patch.active === 'boolean') clean.active = patch.active;
+
+  if (Object.keys(clean).length > 0) await db.classGroups.update(cls.id, clean);
+  return { ...cls, ...clean };
+}
+
+/**
+ * Archive (soft-delete) a class that has students or attendance history; delete
+ * an empty one outright. Restore with `updateClass(id, { active: true })`.
+ */
+export async function archiveClass(classGroupId) {
+  const cls = await getClassById(classGroupId);
+  if (!cls) return { archived: false, deleted: false };
+
+  const studentIds = (await db.students.where('classGroupId').equals(classGroupId).toArray())
+    .map((s) => s.studentId);
+  let historyCount = 0;
+  for (const id of studentIds) {
+    historyCount += await db.attendanceEvents.where('studentId').equals(id).count();
+  }
+  const hasData = studentIds.length > 0 || historyCount > 0;
+  const now = new Date().toISOString();
+
+  await db.transaction('rw', db.classGroups, db.auditLog, async () => {
+    if (hasData) await db.classGroups.update(cls.id, { active: false, archivedAt: now });
+    else await db.classGroups.delete(cls.id);
+    await db.auditLog.add({
+      action: hasData ? 'class.archived' : 'class.deleted',
+      actorId: null, recordId: classGroupId, timestamp: now,
+      detail: JSON.stringify({ students: studentIds.length, historyCount }),
+    });
+  });
+
+  return { archived: hasData, deleted: !hasData };
+}
+
 /**
  * The class roll, A-Z. Removed students (`active === false`) are hidden from
  * every screen by default; the roster manager passes `includeInactive` to show
@@ -271,14 +381,34 @@ export async function getStudentsByClass(classGroupId, { includeInactive = false
     .sort((a, b) => a.fullName.localeCompare(b.fullName));
 }
 
+/** Normalise an RFID card UID: trim, strip spaces, upper-case. Empty -> null. */
+export function normalizeCardUid(raw) {
+  const v = String(raw ?? '').replace(/\s+/g, '').toUpperCase();
+  return v || null;
+}
+
+/** The student currently holding this card UID, if any. */
+export async function getStudentByCard(cardUid) {
+  const uid = normalizeCardUid(cardUid);
+  if (!uid) return null;
+  return (await db.students.toArray()).find((s) => normalizeCardUid(s.cardUid) === uid) ?? null;
+}
+
 /**
  * Add a student to a class (the initial-setup / roster-management flow).
  * The generated `studentId` uses a `stu-` prefix to match the seeded IDs.
+ * `cardUid` is the optional RFID card the student taps at the gate (Tier 2).
  */
-export async function addStudent({ classGroupId, fullName, admissionNo }) {
+export async function addStudent({ classGroupId, fullName, admissionNo, cardUid }) {
   if (!classGroupId) throw new Error('classGroupId is required');
   const name = String(fullName ?? '').trim();
   if (!name) throw new Error('Student name is required');
+
+  const uid = normalizeCardUid(cardUid);
+  if (uid) {
+    const holder = await getStudentByCard(uid);
+    if (holder) throw new Error(`Card ${uid} is already assigned to ${holder.fullName}`);
+  }
 
   const studentId = `stu-${newId()}`;
   const now = new Date().toISOString();
@@ -287,6 +417,7 @@ export async function addStudent({ classGroupId, fullName, admissionNo }) {
     classGroupId,
     fullName: name,
     admissionNo: String(admissionNo ?? '').trim() || null,
+    cardUid: uid,
     enrolledAt: todayISO(),
     active: true,
   };
@@ -295,11 +426,39 @@ export async function addStudent({ classGroupId, fullName, admissionNo }) {
     await db.students.add(record);
     await db.auditLog.add({
       action: 'student.added', actorId: null, recordId: studentId, timestamp: now,
-      detail: JSON.stringify({ fullName: name, classGroupId }),
+      detail: JSON.stringify({ fullName: name, classGroupId, cardUid: uid }),
     });
   });
 
   return record;
+}
+
+/**
+ * Assign (or clear, with a falsy value) a student's RFID card. Enforces one
+ * card per student across the whole device.
+ */
+export async function setStudentCard(studentId, cardUid) {
+  const student = await db.students.where('studentId').equals(studentId).first();
+  if (!student) throw new Error(`Student ${studentId} not found`);
+
+  const uid = normalizeCardUid(cardUid);
+  if (uid) {
+    const holder = await getStudentByCard(uid);
+    if (holder && holder.studentId !== studentId) {
+      throw new Error(`Card ${uid} is already assigned to ${holder.fullName}`);
+    }
+  }
+
+  await db.transaction('rw', db.students, db.auditLog, async () => {
+    await db.students.update(student.id, { cardUid: uid });
+    await db.auditLog.add({
+      action: uid ? 'student.card_assigned' : 'student.card_cleared',
+      actorId: null, recordId: studentId, timestamp: new Date().toISOString(),
+      detail: JSON.stringify({ cardUid: uid }),
+    });
+  });
+
+  return { ...student, cardUid: uid };
 }
 
 /** Edit a student's name or admission number. */

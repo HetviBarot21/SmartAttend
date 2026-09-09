@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getStudentsByClass, getClassHistory } from '../db/database';
-import { seedDatabase, seedDemoHistory } from '../db/seedData';
 import {
   buildWeeklyHeatmap,
   startOfWeek,
@@ -35,8 +34,6 @@ export default function Heatmap({ classGroupId }) {
     let cancelled = false;
     (async () => {
       setLoading(true);
-      await seedDatabase();
-      await seedDemoHistory();
       const [roll, history] = await Promise.all([
         getStudentsByClass(classGroupId),
         getClassHistory(classGroupId, weekStart),

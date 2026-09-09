@@ -7,7 +7,11 @@ export const DEMO_CLASS = {
   schoolId: 'school-kibera-001',
   grade: 'Form 3',
   stream: 'B',
-  academicYear: 2026
+  name: 'Form 3 B',
+  academicYear: 2026,
+  active: true,
+  createdAt: '2026-01-06T00:00:00.000Z',
+  demo: true,
 };
 
 // Student IDs are fixed rather than random so a reseed keeps the same identities:
@@ -27,23 +31,31 @@ export const DEMO_STUDENTS = [
 ].map((s) => ({ ...s, classGroupId: DEMO_CLASS_ID, enrolledAt: '2026-01-06' }));
 
 /**
- * One-time demo seed: the class group + the 10 demo students, but ONLY on a
- * device whose roster is still empty. Once a teacher has touched the roster
- * (added or removed a student) we must not re-add the demo names on the next
- * load, so the guard is "are there any students in this class" rather than the
- * old "are there exactly 10".
+ * Load the sample class (Form 3 B + 10 students) on demand - the "Load a sample
+ * class" option in the setup wizard, so the Heatmap / Alerts screens have
+ * something to show before a real roster is entered.
+ *
+ * No longer runs automatically on every screen load: a teacher who has created
+ * their own class should never see the demo names appear. Idempotent - adds the
+ * class and any missing demo students, repairs an older demo class row that
+ * predates the `active` / `createdAt` fields.
  */
-export async function seedDatabase() {
-  const existing = await db.students.where('classGroupId').equals(DEMO_CLASS_ID).count();
-  if (existing > 0) return { seeded: false };
-
+export async function seedDemoClass() {
   await db.transaction('rw', db.classGroups, db.students, async () => {
     const cls = await db.classGroups.where('classGroupId').equals(DEMO_CLASS_ID).first();
     if (!cls) await db.classGroups.add(DEMO_CLASS);
-    await db.students.bulkAdd(DEMO_STUDENTS.map((s) => ({ ...s, active: true })));
+    else if (cls.active === undefined || !cls.createdAt) {
+      await db.classGroups.update(cls.id, { active: true, createdAt: DEMO_CLASS.createdAt, demo: true });
+    }
+
+    for (const student of DEMO_STUDENTS) {
+      const found = await db.students.where('studentId').equals(student.studentId).first();
+      if (!found) await db.students.add({ ...student, active: true });
+    }
   });
 
-  return { seeded: true, count: DEMO_STUDENTS.length };
+  await seedDemoHistory();
+  return { classGroupId: DEMO_CLASS_ID, count: DEMO_STUDENTS.length };
 }
 
 // --------------------------------------------------------------------------- //

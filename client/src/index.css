@@ -85,6 +85,47 @@ input  { font-family: inherit; }
 }
 
 .screen-title { margin: 0; font-size: 20px; font-weight: 800; letter-spacing: -0.01em; }
+.screen-title--btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink);
+  padding: 0;
+}
+.screen-title--btn svg { color: var(--ink-muted); }
+
+/* class switcher rows */
+.class-row {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--line-soft);
+  padding: 12px 2px;
+  cursor: pointer;
+  text-align: left;
+}
+.class-row[aria-current="true"] { background: var(--indigo-tint); border-radius: var(--radius-sm); }
+.class-row__name { display: block; font-size: 14.5px; font-weight: 700; color: var(--ink); }
+.class-row__meta { display: block; font-size: 12px; color: var(--ink-muted); margin-top: 1px; }
+.class-row__tick { color: var(--indigo-600); font-weight: 800; }
+
+/* two fields side by side */
+.field-row { display: flex; gap: 10px; }
+.field-row .field { flex: 1; min-width: 0; }
+
+.linkbtn--inline { padding: 0; font-size: inherit; font-weight: 700; }
+
+.roll-row--stack { flex-direction: column; align-items: stretch; gap: 8px; }
+.roll-row__main { display: flex; align-items: center; gap: 11px; }
+.roll-row__card { display: flex; gap: 6px; align-items: center; }
+.roll-row__card .field__input { flex: 1; min-width: 0; }
 
 /* screen header: title left, account button right */
 .topbar {
@@ -309,6 +350,7 @@ input  { font-family: inherit; }
   padding: 28px 22px;
   box-shadow: var(--shadow-lg);
 }
+.auth__card--wide { max-width: 440px; }
 .auth__logo {
   width: 46px;
   height: 46px;

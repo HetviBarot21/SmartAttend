@@ -5,7 +5,6 @@ import {
   getAttendanceForDate,
   todayISO,
 } from '../db/database';
-import { seedDatabase, seedDemoHistory } from '../db/seedData';
 import { useAuth } from '../auth/AuthContext';
 import { formatLongDate } from '../lib/attendanceSummary';
 import Avatar from './Avatar';
@@ -30,8 +29,6 @@ export default function AttendanceForm({ classGroupId, pending = 0, onRecordsCha
   const [error, setError] = useState(null);
 
   const load = useCallback(async () => {
-    await seedDatabase();
-    await seedDemoHistory();
     const [roll, todays] = await Promise.all([
       getStudentsByClass(classGroupId),
       getAttendanceForDate(classGroupId, date),

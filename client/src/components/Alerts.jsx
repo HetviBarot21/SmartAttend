@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
 import { getStudentsByClass, getClassHistory } from '../db/database';
-import { seedDatabase, seedDemoHistory } from '../db/seedData';
 import {
   computeFeatures,
   scoreRisk,
@@ -29,8 +28,6 @@ export default function Alerts({ classGroupId, className, onOpenProfile }) {
     let cancelled = false;
     (async () => {
       setLoading(true);
-      await seedDatabase();
-      await seedDemoHistory();
       const [roll, rows] = await Promise.all([
         getStudentsByClass(classGroupId),
         getClassHistory(classGroupId, daysAgoISO(HISTORY_DAYS)),
