@@ -12,6 +12,7 @@ export default function AccountSheet({
   pinSession,
   pinEnrolled,
   onManagePin,
+  onManageRoster,
   onSignOut,
   onSimulateExpiry,
   onClose,
@@ -41,6 +42,15 @@ export default function AccountSheet({
           <span>Records awaiting sync</span>
           <strong>{pending}</strong>
         </div>
+
+        {onManageRoster && (
+          <div className="sheet__row">
+            <span>Class roster</span>
+            <button type="button" className="linkbtn" onClick={onManageRoster}>
+              Add / remove students
+            </button>
+          </div>
+        )}
 
         {onManagePin && (
           <div className="sheet__row">

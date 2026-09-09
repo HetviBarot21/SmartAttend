@@ -93,6 +93,32 @@ describe('POST /api/sync', () => {
     assert.equal(count('SELECT COUNT(*) c FROM attendance_events'), 1);
   });
 
+  test('applies a corrected status for a re-sent eventId and re-queues it', async () => {
+    const rec = record({ status: 'absent' });
+    await postSync({ records: [rec] });
+
+    // mark it synced, as the cloud worker would after a successful push
+    db.prepare("UPDATE sync_queue SET status = 'synced', synced_at = datetime('now') WHERE event_id = ?").run(rec.eventId);
+    db.prepare("UPDATE attendance_events SET synced_at = datetime('now') WHERE event_id = ?").run(rec.eventId);
+
+    const res = await postSync({ records: [{ ...rec, status: 'late' }] });
+    assert.equal(res.status, 200);
+    const body = await res.json();
+
+    assert.deepEqual(body.inserted, [rec.eventId]);
+    assert.deepEqual(body.updated, [rec.eventId]);
+    assert.equal(body.skippedCount, 0);
+
+    const ev = db.prepare('SELECT status, synced_at FROM attendance_events WHERE event_id = ?').get(rec.eventId);
+    assert.equal(ev.status, 'late');
+    assert.equal(ev.synced_at, null);
+
+    const q = db.prepare('SELECT status FROM sync_queue WHERE event_id = ?').get(rec.eventId);
+    assert.equal(q.status, 'pending');
+    assert.equal(count('SELECT COUNT(*) c FROM attendance_events'), 1);
+    assert.equal(count("SELECT COUNT(*) c FROM audit_log WHERE action = 'sync.updated'"), 1);
+  });
+
   test('skips a different event that collides on student + date', async () => {
     const first = record();
     await postSync({ records: [first] });

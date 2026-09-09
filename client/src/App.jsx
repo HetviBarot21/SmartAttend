@@ -3,6 +3,7 @@ import { AuthProvider, useAuth, AUTH_STATUS } from './auth/AuthContext';
 import LoginScreen from './components/LoginScreen';
 import PinUnlock from './components/PinUnlock';
 import PinSetup from './components/PinSetup';
+import RosterManager from './components/RosterManager';
 import AttendanceForm from './components/AttendanceForm';
 import Heatmap from './components/Heatmap';
 import Alerts from './components/Alerts';
@@ -28,6 +29,7 @@ function TeacherApp() {
   const [pending, setPending] = useState(0);
   const [sheetOpen, setSheetOpen] = useState(false);
   const [pinSetupOpen, setPinSetupOpen] = useState(false);
+  const [rosterOpen, setRosterOpen] = useState(false);
 
   const refreshPending = useCallback(async () => {
     setPending(await countPendingSync());
@@ -89,6 +91,16 @@ function TeacherApp() {
     );
   }
 
+  if (rosterOpen) {
+    return (
+      <RosterManager
+        classGroupId={DEMO_CLASS_ID}
+        className={CLASS_NAME}
+        onClose={() => { setRosterOpen(false); setRefreshKey((k) => k + 1); }}
+      />
+    );
+  }
+
   return (
     <div className="app">
       {account}
@@ -104,6 +116,7 @@ function TeacherApp() {
           pinSession={Boolean(session?.pinVerified)}
           pinEnrolled={pinState.enrolled}
           onManagePin={() => { setSheetOpen(false); setPinSetupOpen(true); }}
+          onManageRoster={() => { setSheetOpen(false); setRosterOpen(true); }}
           onSignOut={() => { setSheetOpen(false); signOut(); }}
           onSimulateExpiry={
             import.meta.env.DEV

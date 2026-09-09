@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  addAttendanceBatch,
+  setAttendanceBatch,
   getStudentsByClass,
   getAttendanceForDate,
   todayISO,
@@ -38,54 +38,77 @@ export default function AttendanceForm({ classGroupId, pending = 0, onRecordsCha
     ]);
     setStudents(roll);
     setRecorded(Object.fromEntries(todays.map((r) => [r.studentId, r.status])));
+    setDraft({});
     setLoading(false);
   }, [classGroupId, date]);
 
   useEffect(() => { load(); }, [load]);
 
-  const draftedCount = useMemo(
-    () => students.filter((s) => !(s.studentId in recorded) && draft[s.studentId]).length,
-    [students, recorded, draft]
+  // The status a row currently shows: an unsaved edit if there is one, else the
+  // saved value.
+  const valueFor = useCallback(
+    (studentId) => (studentId in draft ? draft[studentId] : recorded[studentId]),
+    [draft, recorded],
   );
-  const markedCount = Object.keys(recorded).length + draftedCount;
+
+  // Rows whose shown status differs from what's saved - these get written on submit.
+  const dirty = useMemo(
+    () => students.filter((s) => s.studentId in draft && draft[s.studentId] !== recorded[s.studentId]),
+    [students, draft, recorded],
+  );
+  const newCount = dirty.filter((s) => !(s.studentId in recorded)).length;
+  const editCount = dirty.length - newCount;
+
+  const markedCount = students.filter((s) => valueFor(s.studentId)).length;
   const total = students.length;
   const pct = total === 0 ? 0 : Math.round((markedCount / total) * 100);
 
-  function choose(studentId, status) {
-    setDraft((prev) => ({ ...prev, [studentId]: prev[studentId] === status ? undefined : status }));
-    setResult(null);
-  }
+  const valueForRaw = (draftMap, studentId) =>
+    (studentId in draftMap ? draftMap[studentId] : recorded[studentId]);
 
-  function markRemainingPresent() {
+  function choose(studentId, status) {
+    setResult(null);
     setDraft((prev) => {
       const next = { ...prev };
-      for (const s of students) {
-        if (!(s.studentId in recorded) && !next[s.studentId]) next[s.studentId] = 'present';
+      const saved = recorded[studentId];
+      if (valueForRaw(prev, studentId) === status) {
+        // tapping the shown status again cancels the pending change
+        if (saved === undefined) delete next[studentId];
+        else next[studentId] = saved;
+      } else {
+        next[studentId] = status;
       }
       return next;
     });
+  }
+
+  function markRemainingPresent() {
     setResult(null);
+    setDraft((prev) => {
+      const next = { ...prev };
+      for (const s of students) {
+        if (!valueForRaw(next, s.studentId)) next[s.studentId] = 'present';
+      }
+      return next;
+    });
   }
 
   async function handleSubmit() {
     setError(null);
     setSaving(true);
     try {
-      const events = students
-        .filter((s) => !(s.studentId in recorded) && draft[s.studentId])
-        .map((s) => ({
-          studentId: s.studentId,
-          date,
-          status: draft[s.studentId],
-          captureMethod: 'manual',
-          recordedBy: user?.username ?? null,
-        }));
+      const events = dirty.map((s) => ({
+        studentId: s.studentId,
+        date,
+        status: draft[s.studentId],
+        captureMethod: 'manual',
+        recordedBy: user?.username ?? null,
+      }));
 
       if (events.length === 0) { setSaving(false); return; }
 
-      const outcome = await addAttendanceBatch(events);
+      const outcome = await setAttendanceBatch(events);
       setResult(outcome);
-      setDraft({});
       await load();
       onRecordsChanged?.();
     } catch (err) {
@@ -97,7 +120,13 @@ export default function AttendanceForm({ classGroupId, pending = 0, onRecordsCha
 
   if (loading) return <p className="empty">Loading class list…</p>;
 
-  const allDone = total > 0 && Object.keys(recorded).length === total;
+  const allMarked = total > 0 && markedCount === total;
+  const savedMsg = result && result.saved.length > 0
+    ? [
+        result.created.length ? `${result.created.length} new` : null,
+        result.updated.length ? `${result.updated.length} changed` : null,
+      ].filter(Boolean).join(', ')
+    : null;
 
   return (
     <>
@@ -112,36 +141,42 @@ export default function AttendanceForm({ classGroupId, pending = 0, onRecordsCha
       </div>
 
       {error && <div className="notice notice--err" role="alert">{error}</div>}
-      {result && result.saved.length > 0 && (
+      {savedMsg && (
         <div className="notice notice--ok" role="status">
-          Saved {result.saved.length} record(s) to this device. They sync when there is a connection.
+          Saved ({savedMsg}) to this device. Changes sync when there is a connection.
         </div>
       )}
-      {result && result.duplicates.length > 0 && (
-        <div className="notice notice--warn" role="status">
-          {result.duplicates.length} already recorded today and were skipped.
+      {result && result.failed.length > 0 && (
+        <div className="notice notice--err" role="alert">
+          {result.failed.length} record(s) could not be saved.
         </div>
       )}
-      {allDone && !result && (
+      {allMarked && !result && (
         <div className="notice notice--ok" role="status">
-          Attendance is complete for today. Each student can be recorded once per day.
+          Everyone is marked for today. Tap a status to correct it — attendance stays editable all day.
         </div>
       )}
 
-      {!allDone && (
-        <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
-          <button type="button" className="btn btn--ghost btn--sm" onClick={markRemainingPresent}>
-            Mark rest present
-          </button>
-        </div>
-      )}
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 10 }}>
+        <button
+          type="button"
+          className="btn btn--ghost btn--sm"
+          onClick={markRemainingPresent}
+          disabled={allMarked && dirty.length === 0}
+        >
+          Mark rest present
+        </button>
+      </div>
 
       <div className="roll">
         {students.map((student) => {
-          const locked = student.studentId in recorded;
-          const value = locked ? recorded[student.studentId] : draft[student.studentId];
+          const value = valueFor(student.studentId);
+          const isEdit = student.studentId in draft && draft[student.studentId] !== recorded[student.studentId];
           return (
-            <div key={student.studentId} className={`roll-row${value ? ' roll-row--marked' : ''}`}>
+            <div
+              key={student.studentId}
+              className={`roll-row${value ? ' roll-row--marked' : ''}${isEdit ? ' roll-row--edited' : ''}`}
+            >
               <Avatar name={student.fullName} size="sm" />
               <button
                 type="button"
@@ -149,29 +184,28 @@ export default function AttendanceForm({ classGroupId, pending = 0, onRecordsCha
                 onClick={() => onOpenProfile?.(student.studentId)}
               >
                 <span className="roll-row__name">{student.fullName}</span>
-                <span className="roll-row__id">ID: {student.admissionNo}</span>
+                <span className="roll-row__id">
+                  ID: {student.admissionNo || '—'}
+                  {student.studentId in recorded ? ` · saved: ${recorded[student.studentId]}` : ''}
+                </span>
               </button>
 
-              {locked ? (
-                <span className={`pill pill--${value}`}>{value}</span>
-              ) : (
-                <div className="pal" role="group" aria-label={`Attendance for ${student.fullName}`}>
-                  {STATUSES.map(({ code, short }) => (
-                    <button
-                      key={code}
-                      type="button"
-                      className="pal__btn"
-                      data-status={code}
-                      aria-pressed={value === code}
-                      aria-label={code}
-                      onClick={() => choose(student.studentId, code)}
-                      disabled={saving}
-                    >
-                      {short}
-                    </button>
-                  ))}
-                </div>
-              )}
+              <div className="pal" role="group" aria-label={`Attendance for ${student.fullName}`}>
+                {STATUSES.map(({ code, short }) => (
+                  <button
+                    key={code}
+                    type="button"
+                    className="pal__btn"
+                    data-status={code}
+                    aria-pressed={value === code}
+                    aria-label={code}
+                    onClick={() => choose(student.studentId, code)}
+                    disabled={saving}
+                  >
+                    {short}
+                  </button>
+                ))}
+              </div>
             </div>
           );
         })}
@@ -189,10 +223,14 @@ export default function AttendanceForm({ classGroupId, pending = 0, onRecordsCha
           type="button"
           className="btn"
           onClick={handleSubmit}
-          disabled={saving || draftedCount === 0}
+          disabled={saving || dirty.length === 0}
         >
           <CheckCircleIcon size={18} />
-          {saving ? 'Saving…' : draftedCount > 0 ? `Submit Attendance (${draftedCount})` : 'Submit Attendance'}
+          {saving
+            ? 'Saving…'
+            : dirty.length > 0
+              ? `Save${editCount ? ' changes' : ''} (${dirty.length})`
+              : 'Save Attendance'}
         </button>
       </div>
     </>

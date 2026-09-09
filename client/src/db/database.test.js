@@ -2,9 +2,15 @@ import {
   db,
   addAttendanceEvent,
   addAttendanceBatch,
+  setAttendance,
+  setAttendanceBatch,
   DuplicateAttendanceError,
   countPendingSync,
   getAttendanceForDate,
+  getStudentsByClass,
+  addStudent,
+  updateStudent,
+  removeStudent,
   todayISO
 } from './database';
 
@@ -162,6 +168,116 @@ describe('addAttendanceBatch - whole roll call', () => {
     expect(outcome.saved.map((r) => r.studentId)).toEqual(['stu-1']);
     expect(outcome.duplicates).toEqual([]);
     expect(outcome.failed).toEqual([{ studentId: 'stu-2', reason: expect.stringMatching(/status must be one of/) }]);
+  });
+});
+
+describe('setAttendance - editing during the day', () => {
+  it('creates the record when none exists yet', async () => {
+    const { record, changed, created } = await setAttendance({
+      studentId: 'stu-1', date: DATE, status: 'absent',
+    });
+    expect({ changed, created }).toEqual({ changed: true, created: true });
+    expect(record.status).toBe('absent');
+    expect(await countPendingSync()).toBe(1);
+  });
+
+  it('updates the status in place, keeping the same eventId, and re-queues it', async () => {
+    const original = await addAttendanceEvent({ studentId: 'stu-1', date: DATE, status: 'absent' });
+    await drainQueue(); // pretend it synced
+
+    const { record, changed, created } = await setAttendance({
+      studentId: 'stu-1', date: DATE, status: 'late', recordedBy: 'teacher.a',
+    });
+
+    expect({ changed, created }).toEqual({ changed: true, created: false });
+    expect(record.eventId).toBe(original.eventId);
+    expect(record.status).toBe('late');
+
+    const stored = await db.attendanceEvents.where('eventId').equals(original.eventId).first();
+    expect(stored.status).toBe('late');
+    expect(stored.syncedAt).toBeNull();
+    expect(await countPendingSync()).toBe(1);
+
+    const queued = await db.syncQueue.where('eventId').equals(original.eventId).first();
+    expect(queued).toMatchObject({ status: 'pending', attemptCount: 0 });
+  });
+
+  it('is a no-op when the status is unchanged', async () => {
+    await addAttendanceEvent({ studentId: 'stu-1', date: DATE, status: 'present' });
+    const { changed } = await setAttendance({ studentId: 'stu-1', date: DATE, status: 'present' });
+    expect(changed).toBe(false);
+    expect(await db.auditLog.where('action').equals('attendance.updated').count()).toBe(0);
+  });
+
+  it('writes an attendance.updated audit row with from/to', async () => {
+    await addAttendanceEvent({ studentId: 'stu-1', date: DATE, status: 'absent' });
+    await setAttendance({ studentId: 'stu-1', date: DATE, status: 'present' });
+
+    const audit = await db.auditLog.where('action').equals('attendance.updated').first();
+    expect(JSON.parse(audit.detail)).toEqual({ from: 'absent', to: 'present' });
+  });
+
+  it('setAttendanceBatch reports created / updated / unchanged separately', async () => {
+    await addAttendanceEvent({ studentId: 'stu-1', date: DATE, status: 'present' });
+    const out = await setAttendanceBatch([
+      { studentId: 'stu-1', date: DATE, status: 'present' }, // unchanged
+      { studentId: 'stu-2', date: DATE, status: 'absent' },  // created
+      { studentId: 'stu-1', date: DATE, status: 'late' },    // stu-1 again -> updated
+    ]);
+    expect(out.created).toEqual(['stu-2']);
+    expect(out.updated).toEqual(['stu-1']);
+    expect(out.unchanged).toEqual(['stu-1']);
+  });
+
+  // reopening the queue relies on there being a row to reopen; drain it first
+  async function drainQueue() {
+    await db.syncQueue.toCollection().modify({ status: 'synced' });
+    await db.attendanceEvents.toCollection().modify({ syncedAt: new Date().toISOString() });
+  }
+});
+
+describe('roster management', () => {
+  const CLASS = 'class-form3b-001';
+
+  it('adds a student with a generated stu- id and active flag', async () => {
+    const s = await addStudent({ classGroupId: CLASS, fullName: '  Jane Doe  ', admissionNo: '3B/099' });
+    expect(s.studentId).toMatch(/^stu-/);
+    expect(s).toMatchObject({ fullName: 'Jane Doe', admissionNo: '3B/099', active: true });
+
+    const roll = await getStudentsByClass(CLASS);
+    expect(roll.map((r) => r.fullName)).toEqual(['Jane Doe']);
+  });
+
+  it('rejects an empty name', async () => {
+    await expect(addStudent({ classGroupId: CLASS, fullName: '   ' })).rejects.toThrow(/name is required/);
+  });
+
+  it('hard-deletes a student with no attendance history', async () => {
+    const s = await addStudent({ classGroupId: CLASS, fullName: 'No History' });
+    const res = await removeStudent(s.studentId);
+    expect(res).toEqual({ removed: true, softDeleted: false });
+    expect(await db.students.where('studentId').equals(s.studentId).count()).toBe(0);
+  });
+
+  it('soft-deletes a student who has attendance, hiding them from the roll but keeping the row', async () => {
+    const s = await addStudent({ classGroupId: CLASS, fullName: 'Has History' });
+    await addAttendanceEvent({ studentId: s.studentId, date: DATE, status: 'present' });
+
+    const res = await removeStudent(s.studentId);
+    expect(res).toEqual({ removed: true, softDeleted: true });
+
+    expect(await getStudentsByClass(CLASS)).toEqual([]);
+    expect((await getStudentsByClass(CLASS, { includeInactive: true })).length).toBe(1);
+
+    // restore
+    await updateStudent(s.studentId, { active: true });
+    expect((await getStudentsByClass(CLASS)).length).toBe(1);
+  });
+
+  it('updateStudent trims the name and clears a blank admission number', async () => {
+    const s = await addStudent({ classGroupId: CLASS, fullName: 'Old Name', admissionNo: '1' });
+    const updated = await updateStudent(s.studentId, { fullName: '  New Name  ', admissionNo: '' });
+    expect(updated).toMatchObject({ fullName: 'New Name', admissionNo: null });
   });
 });
 

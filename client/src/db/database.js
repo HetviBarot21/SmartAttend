@@ -129,6 +129,111 @@ export async function addAttendanceEvent(event) {
 }
 
 /**
+ * Set a student's status for a date, creating the record if it does not exist
+ * yet and updating it in place if it does.
+ *
+ * Attendance is a living value during the school day - a student marked absent
+ * at 8am who walks in at 9am should become `late`, not stay wrong until
+ * tomorrow. The record keeps its original `eventId` (the sync idempotency key -
+ * its identity has not changed, only its content), gets an `updatedAt` stamp,
+ * and is put back on the sync queue as `pending` so the correction propagates.
+ * Every change writes an `attendance.updated` audit row with `{from, to}`.
+ *
+ * @returns {Promise<{record: object, changed: boolean, created: boolean}>}
+ * @throws {Error} on an invalid studentId / date / status
+ */
+export async function setAttendance(event) {
+  const { studentId, date, status, captureMethod = 'manual', recordedBy } = event;
+
+  if (!studentId) throw new Error('studentId is required');
+  if (!date) throw new Error('date is required');
+  if (!ATTENDANCE_STATUSES.includes(status)) {
+    throw new Error(`status must be one of ${ATTENDANCE_STATUSES.join(', ')} (got "${status}")`);
+  }
+
+  const existing = await db.attendanceEvents
+    .where('[studentId+date]')
+    .equals([studentId, date])
+    .first();
+
+  if (!existing) {
+    const record = await addAttendanceEvent(event);
+    return { record, changed: true, created: true };
+  }
+
+  if (existing.status === status) {
+    return { record: existing, changed: false, created: false };
+  }
+
+  const updatedAt = new Date().toISOString();
+  await db.transaction('rw', db.attendanceEvents, db.syncQueue, db.auditLog, async () => {
+    await db.attendanceEvents.update(existing.id, {
+      status,
+      captureMethod,
+      recordedBy: recordedBy ?? existing.recordedBy ?? null,
+      updatedAt,
+      syncedAt: null,
+    });
+
+    // Re-open the sync-queue row (or add one if a prior sync already retired it)
+    // so drainSyncQueue picks the correction up on the next pass.
+    const queued = await db.syncQueue.where('eventId').equals(existing.eventId).first();
+    if (queued) {
+      await db.syncQueue.update(queued.id, {
+        status: 'pending', attemptCount: 0, nextAttemptAt: null, lastError: null, updatedAt,
+      });
+    } else {
+      await db.syncQueue.add({
+        eventId: existing.eventId, status: 'pending', createdAt: updatedAt, attemptCount: 0, updatedAt,
+      });
+    }
+
+    await db.auditLog.add({
+      action: 'attendance.updated',
+      actorId: recordedBy ?? null,
+      recordId: existing.eventId,
+      timestamp: updatedAt,
+      detail: JSON.stringify({ from: existing.status, to: status }),
+    });
+  });
+
+  return {
+    record: { ...existing, status, captureMethod, updatedAt, syncedAt: null },
+    changed: true,
+    created: false,
+  };
+}
+
+/**
+ * Apply a set of status changes (a re-submitted roll call, some rows new, some
+ * edited). Never throws for one bad row - returns per-student outcomes.
+ *
+ * @returns {Promise<{saved: object[], created: string[], updated: string[], unchanged: string[], failed: {studentId, reason}[]}>}
+ */
+export async function setAttendanceBatch(events) {
+  const saved = [];
+  const created = [];
+  const updated = [];
+  const unchanged = [];
+  const failed = [];
+
+  for (const event of events) {
+    try {
+      const outcome = await setAttendance(event);
+      if (!outcome.changed) unchanged.push(event.studentId);
+      else {
+        saved.push(outcome.record);
+        (outcome.created ? created : updated).push(event.studentId);
+      }
+    } catch (err) {
+      failed.push({ studentId: event.studentId, reason: err.message });
+    }
+  }
+
+  return { saved, created, updated, unchanged, failed };
+}
+
+/**
  * Write a whole roll call. Returns per-student outcomes rather than throwing,
  * so one already-recorded student cannot discard the rest of the class.
  */
@@ -153,9 +258,97 @@ export async function getStudentById(studentId) {
   return db.students.where('studentId').equals(studentId).first();
 }
 
-export async function getStudentsByClass(classGroupId) {
+/**
+ * The class roll, A-Z. Removed students (`active === false`) are hidden from
+ * every screen by default; the roster manager passes `includeInactive` to show
+ * and restore them. `active` is undefined on students seeded before this field
+ * existed, so the check is `!== false`, not `=== true`.
+ */
+export async function getStudentsByClass(classGroupId, { includeInactive = false } = {}) {
   const students = await db.students.where('classGroupId').equals(classGroupId).toArray();
-  return students.sort((a, b) => a.fullName.localeCompare(b.fullName));
+  return students
+    .filter((s) => includeInactive || s.active !== false)
+    .sort((a, b) => a.fullName.localeCompare(b.fullName));
+}
+
+/**
+ * Add a student to a class (the initial-setup / roster-management flow).
+ * The generated `studentId` uses a `stu-` prefix to match the seeded IDs.
+ */
+export async function addStudent({ classGroupId, fullName, admissionNo }) {
+  if (!classGroupId) throw new Error('classGroupId is required');
+  const name = String(fullName ?? '').trim();
+  if (!name) throw new Error('Student name is required');
+
+  const studentId = `stu-${newId()}`;
+  const now = new Date().toISOString();
+  const record = {
+    studentId,
+    classGroupId,
+    fullName: name,
+    admissionNo: String(admissionNo ?? '').trim() || null,
+    enrolledAt: todayISO(),
+    active: true,
+  };
+
+  await db.transaction('rw', db.students, db.auditLog, async () => {
+    await db.students.add(record);
+    await db.auditLog.add({
+      action: 'student.added', actorId: null, recordId: studentId, timestamp: now,
+      detail: JSON.stringify({ fullName: name, classGroupId }),
+    });
+  });
+
+  return record;
+}
+
+/** Edit a student's name or admission number. */
+export async function updateStudent(studentId, patch = {}) {
+  const student = await db.students.where('studentId').equals(studentId).first();
+  if (!student) throw new Error(`Student ${studentId} not found`);
+
+  const clean = {};
+  if (patch.fullName != null) {
+    const name = String(patch.fullName).trim();
+    if (!name) throw new Error('Student name is required');
+    clean.fullName = name;
+  }
+  if (patch.admissionNo !== undefined) {
+    clean.admissionNo = String(patch.admissionNo ?? '').trim() || null;
+  }
+  if (typeof patch.active === 'boolean') clean.active = patch.active;
+
+  if (Object.keys(clean).length > 0) await db.students.update(student.id, clean);
+  return { ...student, ...clean };
+}
+
+/**
+ * Remove a student from a class. A student who already has attendance history is
+ * deactivated (soft delete) so the heatmap and past reports stay intact; one
+ * with no records is deleted outright. Restore a soft-deleted student with
+ * `updateStudent(id, { active: true })`.
+ *
+ * @returns {Promise<{removed: boolean, softDeleted: boolean}>}
+ */
+export async function removeStudent(studentId) {
+  const student = await db.students.where('studentId').equals(studentId).first();
+  if (!student) return { removed: false, softDeleted: false };
+
+  const historyCount = await db.attendanceEvents.where('studentId').equals(studentId).count();
+  const soft = historyCount > 0;
+  const now = new Date().toISOString();
+
+  await db.transaction('rw', db.students, db.auditLog, async () => {
+    if (soft) await db.students.update(student.id, { active: false, removedAt: now });
+    else await db.students.delete(student.id);
+    await db.auditLog.add({
+      action: soft ? 'student.deactivated' : 'student.deleted',
+      actorId: null, recordId: studentId, timestamp: now,
+      detail: JSON.stringify({ fullName: student.fullName, historyCount }),
+    });
+  });
+
+  return { removed: true, softDeleted: soft };
 }
 
 /** Attendance rows for one class on one date. */

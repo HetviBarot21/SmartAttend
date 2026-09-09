@@ -27,22 +27,20 @@ export const DEMO_STUDENTS = [
 ].map((s) => ({ ...s, classGroupId: DEMO_CLASS_ID, enrolledAt: '2026-01-06' }));
 
 /**
- * Idempotent seed. Uses put() rather than add() so re-running against a
- * partially seeded database repairs it instead of throwing on the unique index.
+ * One-time demo seed: the class group + the 10 demo students, but ONLY on a
+ * device whose roster is still empty. Once a teacher has touched the roster
+ * (added or removed a student) we must not re-add the demo names on the next
+ * load, so the guard is "are there any students in this class" rather than the
+ * old "are there exactly 10".
  */
 export async function seedDatabase() {
   const existing = await db.students.where('classGroupId').equals(DEMO_CLASS_ID).count();
-  if (existing === DEMO_STUDENTS.length) return { seeded: false };
+  if (existing > 0) return { seeded: false };
 
   await db.transaction('rw', db.classGroups, db.students, async () => {
     const cls = await db.classGroups.where('classGroupId').equals(DEMO_CLASS_ID).first();
     if (!cls) await db.classGroups.add(DEMO_CLASS);
-
-    for (const student of DEMO_STUDENTS) {
-      const found = await db.students.where('studentId').equals(student.studentId).first();
-      if (found) await db.students.update(found.id, student);
-      else await db.students.add(student);
-    }
+    await db.students.bulkAdd(DEMO_STUDENTS.map((s) => ({ ...s, active: true })));
   });
 
   return { seeded: true, count: DEMO_STUDENTS.length };

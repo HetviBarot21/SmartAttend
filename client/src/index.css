@@ -218,6 +218,24 @@ input  { font-family: inherit; }
   padding: 6px;
 }
 .linkbtn:disabled { color: var(--ink-muted); cursor: not-allowed; }
+.linkbtn--muted { color: var(--ink-muted); }
+
+/* roster editor */
+.roster-x {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1.5px solid var(--line);
+  background: none;
+  color: var(--ink-muted);
+  font-size: 19px;
+  line-height: 1;
+  cursor: pointer;
+}
+.roster-x:hover:not(:disabled) { border-color: var(--absent); color: var(--absent); }
+.roster-confirm { display: inline-flex; align-items: center; gap: 2px; flex: none; }
+.roster-confirm .linkbtn:first-child { color: var(--absent); }
 
 /* =============================================================== notices === */
 
@@ -446,6 +464,7 @@ input  { font-family: inherit; }
   gap: 11px;
 }
 .roll-row--marked { background: var(--indigo-tint); border-color: var(--indigo-200); }
+.roll-row--edited { box-shadow: inset 3px 0 0 var(--late); }
 
 .roll-row__who {
   flex: 1;
