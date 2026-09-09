@@ -114,10 +114,18 @@ function TeacherApp() {
     );
   }
 
-  let body;
   if (profileId) {
-    body = <StudentProfile studentId={profileId} className={activeLabel} />;
-  } else if (tab === 'heatmap') {
+    return (
+      <StudentProfile
+        studentId={profileId}
+        className={activeLabel}
+        onBack={() => setProfileId(null)}
+      />
+    );
+  }
+
+  let body;
+  if (tab === 'heatmap') {
     body = <Heatmap key={activeClassId} classGroupId={activeClassId} />;
   } else if (tab === 'alerts') {
     body = <Alerts key={activeClassId} classGroupId={activeClassId} className={activeLabel} onOpenProfile={openProfile} />;
@@ -133,20 +141,17 @@ function TeacherApp() {
     );
   }
 
-  const showSwitcher = !profileId && tab === 'attendance';
-
   return (
     <div className="app">
       <TopBar
-        title={profileId ? 'Profile' : (tab === 'attendance' ? activeLabel : STATIC_TITLES[tab])}
-        onBack={profileId ? () => setProfileId(null) : undefined}
-        onTitleClick={showSwitcher ? () => setSwitcherOpen(true) : undefined}
+        title={tab === 'attendance' ? activeLabel : STATIC_TITLES[tab]}
+        onTitleClick={tab === 'attendance' ? () => setSwitcherOpen(true) : undefined}
         online={online}
         onAccount={() => setSheetOpen(true)}
       />
       <div className="app__scroll">{body}</div>
 
-      {!profileId && <BottomNav active={tab} onChange={goTab} />}
+      <BottomNav active={tab} onChange={goTab} />
 
       {switcherOpen && (
         <ClassSwitcher

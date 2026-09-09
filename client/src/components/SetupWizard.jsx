@@ -10,7 +10,8 @@ import { CapIcon } from './icons';
 /**
  * First-run setup, shown when the device has no classes yet. Two steps:
  *   1. create the class
- *   2. add its students (name + admission no, optional RFID card)
+ *   2. enrol its students (name + admission no); each gets an RFID card number
+ *      issued automatically, ready to print onto a physical card.
  * A "load a sample class" shortcut seeds the Form 3 B demo instead.
  */
 export default function SetupWizard({ onDone }) {
@@ -18,7 +19,6 @@ export default function SetupWizard({ onDone }) {
   const [students, setStudents] = useState([]);
   const [name, setName] = useState('');
   const [admissionNo, setAdmissionNo] = useState('');
-  const [cardUid, setCardUid] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
 
@@ -34,10 +34,8 @@ export default function SetupWizard({ onDone }) {
     setError(null);
     setBusy(true);
     try {
-      await addStudent({
-        classGroupId: cls.classGroupId, fullName: name, admissionNo, cardUid,
-      });
-      setName(''); setAdmissionNo(''); setCardUid('');
+      await addStudent({ classGroupId: cls.classGroupId, fullName: name, admissionNo });
+      setName(''); setAdmissionNo('');
       await reload();
     } catch (err) {
       setError(err.message ?? 'Could not add the student');
@@ -92,8 +90,8 @@ export default function SetupWizard({ onDone }) {
     <div className="auth">
       <div className="auth__card auth__card--wide">
         <div className="auth__logo"><CapIcon size={24} /></div>
-        <h1 className="auth__brand">Add students</h1>
-        <p className="auth__tagline">{classLabel(cls)} · {students.length} added</p>
+        <h1 className="auth__brand">Enrol students</h1>
+        <p className="auth__tagline">{classLabel(cls)} · {students.length} enrolled</p>
 
         <form className="card" onSubmit={handleAddStudent}>
           {error && <div className="notice notice--err" role="alert">{error}</div>}
@@ -106,26 +104,19 @@ export default function SetupWizard({ onDone }) {
               onChange={(e) => setName(e.target.value)} disabled={busy} required
             />
           </div>
-          <div className="field-row">
-            <div className="field">
-              <label className="field__label" htmlFor="sw-adm">Admission no.</label>
-              <input
-                id="sw-adm" className="field__input" type="text" autoComplete="off"
-                placeholder="3B/011" value={admissionNo}
-                onChange={(e) => setAdmissionNo(e.target.value)} disabled={busy}
-              />
-            </div>
-            <div className="field">
-              <label className="field__label" htmlFor="sw-card">RFID card <span style={{ fontWeight: 400 }}>(optional)</span></label>
-              <input
-                id="sw-card" className="field__input" type="text" autoComplete="off"
-                placeholder="04A1B2C3" value={cardUid}
-                onChange={(e) => setCardUid(e.target.value)} disabled={busy}
-              />
-            </div>
+          <div className="field">
+            <label className="field__label" htmlFor="sw-adm">Admission no. <span style={{ fontWeight: 400 }}>(optional)</span></label>
+            <input
+              id="sw-adm" className="field__input" type="text" autoComplete="off"
+              placeholder="3B/011" value={admissionNo}
+              onChange={(e) => setAdmissionNo(e.target.value)} disabled={busy}
+            />
           </div>
+          <p className="card__hint" style={{ margin: '0 0 10px' }}>
+            An RFID card number is issued automatically — print the list onto cards from the roster later.
+          </p>
           <button className="btn btn--secondary" type="submit" disabled={busy || name.trim() === ''}>
-            Add student
+            Enrol student
           </button>
         </form>
 
@@ -137,7 +128,7 @@ export default function SetupWizard({ onDone }) {
                 <div className="roll-row__who" style={{ cursor: 'default' }}>
                   <span className="roll-row__name">{s.fullName}</span>
                   <span className="roll-row__id">
-                    ID: {s.admissionNo || '—'}{s.cardUid ? ` · card ${s.cardUid}` : ''}
+                    Adm {s.admissionNo || '—'} · card <b>{s.cardUid}</b>
                   </span>
                 </div>
                 <button

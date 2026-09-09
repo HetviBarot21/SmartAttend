@@ -11,6 +11,7 @@ import {
   toISO,
 } from '../lib/riskModel';
 import Avatar from './Avatar';
+import TopBar from './TopBar';
 import { AlertTriangleIcon, ChevronDownIcon } from './icons';
 
 const RISK_LABEL = { red: 'HIGH RISK', amber: 'AT RISK', green: 'ON TRACK' };
@@ -60,7 +61,17 @@ function TrendChart({ points }) {
   );
 }
 
-export default function StudentProfile({ studentId, className }) {
+/** Full-screen page shell so the profile is a proper page, not an inline panel. */
+function ProfilePage({ title, onBack, children }) {
+  return (
+    <div className="app">
+      <TopBar title={title} onBack={onBack} />
+      <div className="app__scroll">{children}</div>
+    </div>
+  );
+}
+
+export default function StudentProfile({ studentId, className, onBack }) {
   const [student, setStudent] = useState(null);
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -94,8 +105,8 @@ export default function StudentProfile({ studentId, className }) {
     return { features, risk, trend, insights, confidence, assessable: isAssessable(rows) };
   }, [history]);
 
-  if (loading) return <p className="empty">Loading profile…</p>;
-  if (!student) return <p className="empty">Student not found.</p>;
+  if (loading) return <ProfilePage title="Profile" onBack={onBack}><p className="empty">Loading profile…</p></ProfilePage>;
+  if (!student) return <ProfilePage title="Profile" onBack={onBack}><p className="empty">Student not found.</p></ProfilePage>;
 
   const { risk, trend, insights, confidence, features, assessable } = model;
   const enrolled = student.enrolledAt ? fmtDate(student.enrolledAt).long : '—';
@@ -103,7 +114,7 @@ export default function StudentProfile({ studentId, className }) {
   const shown = showAll ? recent : recent.slice(0, INITIAL_HISTORY);
 
   return (
-    <>
+    <ProfilePage title={student.fullName} onBack={onBack}>
       <div className="card">
         <div className="profile-hero">
           <Avatar name={student.fullName} size="lg" />
@@ -111,6 +122,8 @@ export default function StudentProfile({ studentId, className }) {
             <div className="profile-hero__name">{student.fullName}</div>
             <div className="profile-hero__meta">
               Class: {className}
+              <br />Admission no: {student.admissionNo || '—'}
+              <br />RFID card: {student.cardUid || 'not issued'}
               <br />Enrolled: {enrolled}
             </div>
           </div>
@@ -218,6 +231,6 @@ export default function StudentProfile({ studentId, className }) {
           </>
         )}
       </div>
-    </>
+    </ProfilePage>
   );
 }

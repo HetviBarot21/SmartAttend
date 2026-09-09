@@ -381,6 +381,16 @@ export async function getStudentsByClass(classGroupId, { includeInactive = false
     .sort((a, b) => a.fullName.localeCompare(b.fullName));
 }
 
+// --------------------------------------------------------------------------- //
+// RFID cards                                                                  //
+//                                                                             //
+// The workflow is: enrol the student -> the system issues them a random card  //
+// number -> that number is printed/encoded onto a physical card they tap at   //
+// the gate. Teachers never type a card UID; they can reissue one (lost card). //
+// Format: 8 upper-case hex characters, e.g. "A1B2C3D4" - matches the UID      //
+// shape the Tier 2 RFID simulation already uses.                              //
+// --------------------------------------------------------------------------- //
+
 /** Normalise an RFID card UID: trim, strip spaces, upper-case. Empty -> null. */
 export function normalizeCardUid(raw) {
   const v = String(raw ?? '').replace(/\s+/g, '').toUpperCase();
@@ -394,20 +404,37 @@ export async function getStudentByCard(cardUid) {
   return (await db.students.toArray()).find((s) => normalizeCardUid(s.cardUid) === uid) ?? null;
 }
 
+function randomCardUid() {
+  const bytes = crypto.getRandomValues(new Uint8Array(4));
+  return [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('').toUpperCase();
+}
+
+/** A fresh card UID guaranteed not to collide with any student on this device. */
+export async function generateCardUid() {
+  const taken = new Set(
+    (await db.students.toArray()).map((s) => normalizeCardUid(s.cardUid)).filter(Boolean),
+  );
+  let uid = randomCardUid();
+  while (taken.has(uid)) uid = randomCardUid();
+  return uid;
+}
+
 /**
- * Add a student to a class (the initial-setup / roster-management flow).
- * The generated `studentId` uses a `stu-` prefix to match the seeded IDs.
- * `cardUid` is the optional RFID card the student taps at the gate (Tier 2).
+ * Enrol a student in a class. The system issues them a random RFID card number
+ * straight away (pass `cardUid` only to import an existing one). The generated
+ * `studentId` uses a `stu-` prefix to match the seeded IDs.
  */
 export async function addStudent({ classGroupId, fullName, admissionNo, cardUid }) {
   if (!classGroupId) throw new Error('classGroupId is required');
   const name = String(fullName ?? '').trim();
   if (!name) throw new Error('Student name is required');
 
-  const uid = normalizeCardUid(cardUid);
+  let uid = normalizeCardUid(cardUid);
   if (uid) {
     const holder = await getStudentByCard(uid);
     if (holder) throw new Error(`Card ${uid} is already assigned to ${holder.fullName}`);
+  } else {
+    uid = await generateCardUid();
   }
 
   const studentId = `stu-${newId()}`;
@@ -418,6 +445,7 @@ export async function addStudent({ classGroupId, fullName, admissionNo, cardUid 
     fullName: name,
     admissionNo: String(admissionNo ?? '').trim() || null,
     cardUid: uid,
+    cardIssuedAt: now,
     enrolledAt: todayISO(),
     active: true,
   };
@@ -425,7 +453,7 @@ export async function addStudent({ classGroupId, fullName, admissionNo, cardUid 
   await db.transaction('rw', db.students, db.auditLog, async () => {
     await db.students.add(record);
     await db.auditLog.add({
-      action: 'student.added', actorId: null, recordId: studentId, timestamp: now,
+      action: 'student.enrolled', actorId: null, recordId: studentId, timestamp: now,
       detail: JSON.stringify({ fullName: name, classGroupId, cardUid: uid }),
     });
   });
@@ -434,8 +462,28 @@ export async function addStudent({ classGroupId, fullName, admissionNo, cardUid 
 }
 
 /**
- * Assign (or clear, with a falsy value) a student's RFID card. Enforces one
- * card per student across the whole device.
+ * Issue a student a fresh random card number - use when a card is lost or
+ * damaged and a replacement must be printed. Returns the new UID.
+ */
+export async function issueCard(studentId) {
+  const student = await db.students.where('studentId').equals(studentId).first();
+  if (!student) throw new Error(`Student ${studentId} not found`);
+
+  const uid = await generateCardUid();
+  const now = new Date().toISOString();
+  await db.transaction('rw', db.students, db.auditLog, async () => {
+    await db.students.update(student.id, { cardUid: uid, cardIssuedAt: now });
+    await db.auditLog.add({
+      action: 'student.card_issued', actorId: null, recordId: studentId, timestamp: now,
+      detail: JSON.stringify({ cardUid: uid, replaces: student.cardUid ?? null }),
+    });
+  });
+  return { ...student, cardUid: uid, cardIssuedAt: now };
+}
+
+/**
+ * Set or clear a student's card UID by hand (importing a pre-printed batch, or
+ * clearing a card with a falsy value). Enforces one card per student device-wide.
  */
 export async function setStudentCard(studentId, cardUid) {
   const student = await db.students.where('studentId').equals(studentId).first();
@@ -450,7 +498,7 @@ export async function setStudentCard(studentId, cardUid) {
   }
 
   await db.transaction('rw', db.students, db.auditLog, async () => {
-    await db.students.update(student.id, { cardUid: uid });
+    await db.students.update(student.id, { cardUid: uid, cardIssuedAt: uid ? new Date().toISOString() : null });
     await db.auditLog.add({
       action: uid ? 'student.card_assigned' : 'student.card_cleared',
       actorId: null, recordId: studentId, timestamp: new Date().toISOString(),

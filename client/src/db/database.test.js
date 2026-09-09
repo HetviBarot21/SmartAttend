@@ -12,6 +12,9 @@ import {
   updateStudent,
   removeStudent,
   setStudentCard,
+  issueCard,
+  generateCardUid,
+  getStudentByCard,
   normalizeCardUid,
   getClasses,
   getClassById,
@@ -289,7 +292,7 @@ describe('roster management', () => {
   });
 });
 
-describe('RFID card assignment', () => {
+describe('RFID cards', () => {
   const CLASS = 'class-x';
 
   it('normalizes a card UID (trim, strip spaces, upper-case)', () => {
@@ -298,9 +301,18 @@ describe('RFID card assignment', () => {
     expect(normalizeCardUid(null)).toBeNull();
   });
 
-  it('stores a card on add and rejects a duplicate card on another student', async () => {
+  it('issues a unique 8-hex card number on enrolment', async () => {
+    const a = await addStudent({ classGroupId: CLASS, fullName: 'A' });
+    const b = await addStudent({ classGroupId: CLASS, fullName: 'B' });
+    expect(a.cardUid).toMatch(/^[0-9A-F]{8}$/);
+    expect(b.cardUid).toMatch(/^[0-9A-F]{8}$/);
+    expect(a.cardUid).not.toBe(b.cardUid);
+    expect(a.cardIssuedAt).toEqual(expect.any(String));
+  });
+
+  it('honours an explicit card on add and rejects a duplicate on another student', async () => {
     await addStudent({ classGroupId: CLASS, fullName: 'A', cardUid: '04a1b2c3' });
-    const a = (await getStudentsByClass(CLASS))[0];
+    const a = (await getStudentsByClass(CLASS)).find((s) => s.fullName === 'A');
     expect(a.cardUid).toBe('04A1B2C3');
 
     await expect(
@@ -308,12 +320,27 @@ describe('RFID card assignment', () => {
     ).rejects.toThrow(/already assigned to A/);
   });
 
-  it('setStudentCard assigns, reassigns, and clears', async () => {
+  it('issueCard replaces a lost card with a fresh number', async () => {
     const s = await addStudent({ classGroupId: CLASS, fullName: 'C' });
-    await setStudentCard(s.studentId, 'AABB');
-    expect((await getStudentsByClass(CLASS))[0].cardUid).toBe('AABB');
+    const first = s.cardUid;
+    const res = await issueCard(s.studentId);
+    expect(res.cardUid).toMatch(/^[0-9A-F]{8}$/);
+    expect(res.cardUid).not.toBe(first);
+    expect((await getStudentsByClass(CLASS))[0].cardUid).toBe(res.cardUid);
+  });
 
-    await setStudentCard(s.studentId, ''); // clear
+  it('generateCardUid never collides with an existing card', async () => {
+    await addStudent({ classGroupId: CLASS, fullName: 'D', cardUid: 'AAAAAAAA' });
+    const uid = await generateCardUid();
+    expect(uid).not.toBe('AAAAAAAA');
+    expect(await getStudentByCard(uid)).toBeNull();
+  });
+
+  it('setStudentCard still allows a manual override / clear', async () => {
+    const s = await addStudent({ classGroupId: CLASS, fullName: 'E' });
+    await setStudentCard(s.studentId, 'BBBBBBBB');
+    expect((await getStudentsByClass(CLASS))[0].cardUid).toBe('BBBBBBBB');
+    await setStudentCard(s.studentId, '');
     expect((await getStudentsByClass(CLASS))[0].cardUid).toBeNull();
   });
 });

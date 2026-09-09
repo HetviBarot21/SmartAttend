@@ -834,3 +834,35 @@ input  { font-family: inherit; }
   .avatar--md { width: 38px; height: 38px; }
   .pal__btn { width: 30px; height: 30px; }
 }
+
+/* ========================================================= RFID card list === */
+
+.cardlist-sheet {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 18px;
+}
+.cardlist-sheet__head h1 { margin: 0; font-size: 16px; font-weight: 800; }
+.cardlist-sheet__head p { margin: 2px 0 14px; font-size: 12px; color: var(--ink-muted); }
+
+.cardlist-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.cardlist-table th,
+.cardlist-table td { text-align: left; padding: 8px 6px; border-bottom: 1px solid var(--line-soft); }
+.cardlist-table th { font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em; color: var(--ink-muted); }
+.cardlist-table__uid {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-weight: 700;
+  letter-spacing: 0.05em;
+}
+
+@media print {
+  body { background: #fff; }
+  .no-print,
+  .topbar,
+  .bottom-nav { display: none !important; }
+  .app__scroll { padding: 0; }
+  .cardlist-sheet { border: none; padding: 0; }
+  .cardlist-table th,
+  .cardlist-table td { border-bottom: 1px solid #ccc; }
+}

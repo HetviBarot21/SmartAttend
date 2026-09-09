@@ -4,16 +4,18 @@ import {
   addStudent,
   updateStudent,
   removeStudent,
-  setStudentCard,
+  issueCard,
 } from '../db/database';
 import Avatar from './Avatar';
 import TopBar from './TopBar';
+import CardList from './CardList';
 
 /**
- * Class roster editor - the initial-setup step and ongoing add/remove of
- * students, plus RFID card assignment. Reached from the account sheet or the
- * class switcher. All changes are local to this device; the roster does not yet
- * sync to Tier 2 (see PROJECT_CONTEXT).
+ * Class roster editor - enrol / remove students and reissue lost RFID cards.
+ * Every enrolled student is issued a card number automatically; "Print cards"
+ * opens a printable list to encode onto the physical cards.
+ * Reached from the account sheet or the class switcher. Changes are local to
+ * this device (no Tier 2 student-sync endpoint yet - see PROJECT_CONTEXT).
  */
 export default function RosterManager({ classGroupId, className, onClose }) {
   const [active, setActive] = useState([]);
@@ -21,12 +23,11 @@ export default function RosterManager({ classGroupId, className, onClose }) {
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState('');
   const [admissionNo, setAdmissionNo] = useState('');
-  const [cardUid, setCardUid] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [confirmId, setConfirmId] = useState(null);
-  const [cardEditId, setCardEditId] = useState(null);
-  const [cardDraft, setCardDraft] = useState('');
+  const [reissueId, setReissueId] = useState(null);
+  const [printing, setPrinting] = useState(false);
 
   const load = useCallback(async () => {
     const all = await getStudentsByClass(classGroupId, { includeInactive: true });
@@ -42,13 +43,12 @@ export default function RosterManager({ classGroupId, className, onClose }) {
     setError(null);
     setBusy(true);
     try {
-      await addStudent({ classGroupId, fullName: name, admissionNo, cardUid });
+      await addStudent({ classGroupId, fullName: name, admissionNo });
       setName('');
       setAdmissionNo('');
-      setCardUid('');
       await load();
     } catch (err) {
-      setError(err.message ?? 'Could not add the student');
+      setError(err.message ?? 'Could not enrol the student');
     } finally {
       setBusy(false);
     }
@@ -75,24 +75,19 @@ export default function RosterManager({ classGroupId, className, onClose }) {
     }
   }
 
-  function openCardEdit(s) {
-    setError(null);
-    setCardEditId(s.studentId);
-    setCardDraft(s.cardUid || '');
-  }
-
-  async function saveCard(studentId) {
+  async function handleReissue(studentId) {
     setBusy(true);
-    setError(null);
+    setReissueId(null);
     try {
-      await setStudentCard(studentId, cardDraft);
-      setCardEditId(null);
+      await issueCard(studentId);
       await load();
-    } catch (err) {
-      setError(err.message ?? 'Could not save the card');
     } finally {
       setBusy(false);
     }
+  }
+
+  if (printing) {
+    return <CardList students={active} className={className} onClose={() => setPrinting(false)} />;
   }
 
   return (
@@ -105,8 +100,10 @@ export default function RosterManager({ classGroupId, className, onClose }) {
         </p>
 
         <form className="card" onSubmit={handleAdd}>
-          <h2 className="card__title">Add a student</h2>
-          <p className="card__hint">They appear on today’s roll call straight away.</p>
+          <h2 className="card__title">Enrol a student</h2>
+          <p className="card__hint">
+            They join today’s roll call straight away and are issued an RFID card number.
+          </p>
 
           {error && <div className="notice notice--err" role="alert">{error}</div>}
 
@@ -119,74 +116,67 @@ export default function RosterManager({ classGroupId, className, onClose }) {
             />
           </div>
 
-          <div className="field-row">
-            <div className="field">
-              <label className="field__label" htmlFor="rm-adm">Admission no. <span style={{ fontWeight: 400 }}>(optional)</span></label>
-              <input
-                id="rm-adm" className="field__input" type="text" autoComplete="off"
-                placeholder="3B/011" value={admissionNo}
-                onChange={(e) => setAdmissionNo(e.target.value)} disabled={busy}
-              />
-            </div>
-            <div className="field">
-              <label className="field__label" htmlFor="rm-card">RFID card <span style={{ fontWeight: 400 }}>(optional)</span></label>
-              <input
-                id="rm-card" className="field__input" type="text" autoComplete="off"
-                placeholder="04A1B2C3" value={cardUid}
-                onChange={(e) => setCardUid(e.target.value)} disabled={busy}
-              />
-            </div>
+          <div className="field">
+            <label className="field__label" htmlFor="rm-adm">Admission no. <span style={{ fontWeight: 400 }}>(optional)</span></label>
+            <input
+              id="rm-adm" className="field__input" type="text" autoComplete="off"
+              placeholder="3B/011" value={admissionNo}
+              onChange={(e) => setAdmissionNo(e.target.value)} disabled={busy}
+            />
           </div>
 
           <button className="btn" type="submit" disabled={busy || name.trim() === ''}>
-            {busy ? 'Working…' : 'Add student'}
+            {busy ? 'Working…' : 'Enrol student'}
           </button>
         </form>
+
+        {active.length > 0 && (
+          <button type="button" className="btn btn--secondary" onClick={() => setPrinting(true)}>
+            Print card list ({active.length})
+          </button>
+        )}
 
         {loading ? (
           <p className="empty">Loading roster…</p>
         ) : active.length === 0 ? (
-          <p className="empty">No students yet. Add the first one above.</p>
+          <p className="empty">No students yet. Enrol the first one above.</p>
         ) : (
-          <div className="roll">
+          <div className="roll" style={{ marginTop: 12 }}>
             {active.map((s) => (
-              <div key={s.studentId} className="roll-row roll-row--stack">
-                <div className="roll-row__main">
-                  <Avatar name={s.fullName} size="sm" />
-                  <div className="roll-row__who" style={{ cursor: 'default' }}>
-                    <span className="roll-row__name">{s.fullName}</span>
-                    <span className="roll-row__id">
-                      ID: {s.admissionNo || '—'}
-                      {' · '}
-                      <button type="button" className="linkbtn linkbtn--inline" onClick={() => openCardEdit(s)}>
-                        {s.cardUid ? `card ${s.cardUid}` : 'assign card'}
+              <div key={s.studentId} className="roll-row">
+                <Avatar name={s.fullName} size="sm" />
+                <div className="roll-row__who" style={{ cursor: 'default' }}>
+                  <span className="roll-row__name">{s.fullName}</span>
+                  <span className="roll-row__id">
+                    Adm {s.admissionNo || '—'} · card <b>{s.cardUid || '—'}</b>
+                    {' · '}
+                    {reissueId === s.studentId ? (
+                      <>
+                        <button type="button" className="linkbtn linkbtn--inline" onClick={() => handleReissue(s.studentId)} disabled={busy}>
+                          confirm new card
+                        </button>
+                        {' / '}
+                        <button type="button" className="linkbtn linkbtn--inline linkbtn--muted" onClick={() => setReissueId(null)}>
+                          cancel
+                        </button>
+                      </>
+                    ) : (
+                      <button type="button" className="linkbtn linkbtn--inline" onClick={() => setReissueId(s.studentId)} disabled={busy}>
+                        reissue
                       </button>
-                    </span>
-                  </div>
-                  {confirmId === s.studentId ? (
-                    <span className="roster-confirm">
-                      <button type="button" className="linkbtn" onClick={() => handleRemove(s.studentId)} disabled={busy}>Remove</button>
-                      <button type="button" className="linkbtn linkbtn--muted" onClick={() => setConfirmId(null)}>Cancel</button>
-                    </span>
-                  ) : (
-                    <button
-                      type="button" className="roster-x" aria-label={`Remove ${s.fullName}`}
-                      onClick={() => setConfirmId(s.studentId)} disabled={busy}
-                    >×</button>
-                  )}
+                    )}
+                  </span>
                 </div>
-
-                {cardEditId === s.studentId && (
-                  <div className="roll-row__card">
-                    <input
-                      className="field__input" type="text" autoComplete="off"
-                      placeholder="Card UID (leave blank to clear)"
-                      value={cardDraft} onChange={(e) => setCardDraft(e.target.value)}
-                      disabled={busy}
-                    />
-                    <button type="button" className="btn btn--sm" onClick={() => saveCard(s.studentId)} disabled={busy}>Save</button>
-                    <button type="button" className="linkbtn linkbtn--muted" onClick={() => setCardEditId(null)}>Cancel</button>
-                  </div>
+                {confirmId === s.studentId ? (
+                  <span className="roster-confirm">
+                    <button type="button" className="linkbtn" onClick={() => handleRemove(s.studentId)} disabled={busy}>Remove</button>
+                    <button type="button" className="linkbtn linkbtn--muted" onClick={() => setConfirmId(null)}>Cancel</button>
+                  </span>
+                ) : (
+                  <button
+                    type="button" className="roster-x" aria-label={`Remove ${s.fullName}`}
+                    onClick={() => setConfirmId(s.studentId)} disabled={busy}
+                  >×</button>
                 )}
               </div>
             ))}
