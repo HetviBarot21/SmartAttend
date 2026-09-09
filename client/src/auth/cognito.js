@@ -1,6 +1,7 @@
 import {
   CognitoUserPool,
   CognitoUser,
+  CognitoUserAttribute,
   AuthenticationDetails
 } from 'amazon-cognito-identity-js';
 import { db } from '../db/database';
@@ -72,18 +73,40 @@ function sessionFromCognito(cognitoSession, username) {
   };
 }
 
-function localSession(username, now = Date.now()) {
+function localSession(username, displayName, now = Date.now()) {
   return {
     key: SESSION_KEY,
     mode: 'local',
     username,
-    displayName: username,
+    displayName: displayName || username,
     roles: ['teacher'],
     idToken: null,
     refreshToken: null,
     expiresAt: now + LOCAL_TOKEN_TTL_MS,
     issuedAt: now
   };
+}
+
+/**
+ * Local-mode account profiles. Before the Cognito pool exists (Sprint 2) there
+ * is no server to hold a teacher's name, so "sign up" just records a display
+ * name on the device, keyed by email, in the same IndexedDB table the session
+ * lives in. It is not a credential store - local mode still accepts any
+ * password - it only lets the app greet the teacher by name after sign-up.
+ */
+const accountKey = (email) => `account:${String(email).trim().toLowerCase()}`;
+
+async function saveLocalAccount(email, displayName) {
+  await db.authState.put({
+    key: accountKey(email),
+    email: String(email).trim().toLowerCase(),
+    displayName,
+    createdAt: new Date().toISOString()
+  });
+}
+
+async function loadLocalAccount(email) {
+  return (await db.authState.get(accountKey(email))) ?? null;
 }
 
 export function isSessionValid(session, now = Date.now()) {
@@ -105,7 +128,10 @@ export async function signIn(username, password) {
   }
 
   const pool = userPool();
-  if (!pool) return persist(localSession(username));
+  if (!pool) {
+    const account = await loadLocalAccount(username);
+    return persist(localSession(username, account?.displayName));
+  }
 
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
     throw new AuthError('NETWORK', 'No connection - sign in with your offline PIN instead');
@@ -127,6 +153,104 @@ export async function signIn(username, password) {
   });
 
   return persist(sessionFromCognito(cognitoSession, username));
+}
+
+/**
+ * Register a new teacher.
+ *
+ * Local mode (no pool): records the display name on the device and signs in
+ * immediately - there is nothing to confirm. Returns `{ needsConfirmation: false,
+ * session }`.
+ *
+ * Cognito mode: calls the pool's sign-up, which emails a verification code.
+ * Returns `{ needsConfirmation: true, username }`; the caller then collects the
+ * code and calls confirmSignUp() before the account can sign in.
+ *
+ * @throws {AuthError} INVALID_INPUT | NETWORK | SIGNUP_FAILED
+ */
+export async function signUp({ name, email, password }) {
+  const displayName = name?.trim();
+  const username = email?.trim();
+
+  if (!displayName || !username || !password) {
+    throw new AuthError('INVALID_INPUT', 'Enter your name, email and a password');
+  }
+  if (password.length < 8) {
+    throw new AuthError('INVALID_INPUT', 'Password must be at least 8 characters');
+  }
+
+  const pool = userPool();
+  if (!pool) {
+    await saveLocalAccount(username, displayName);
+    const session = await persist(localSession(username, displayName));
+    return { needsConfirmation: false, session };
+  }
+
+  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+    throw new AuthError('NETWORK', 'Connect to the internet to create an account');
+  }
+
+  const attributes = [
+    new CognitoUserAttribute({ Name: 'email', Value: username }),
+    new CognitoUserAttribute({ Name: 'name', Value: displayName })
+  ];
+
+  await new Promise((resolve, reject) => {
+    pool.signUp(username, password, attributes, [], (err, result) => {
+      if (err) {
+        const code = err?.code === 'NetworkError' ? 'NETWORK' : 'SIGNUP_FAILED';
+        reject(new AuthError(code, err?.message ?? 'Could not create the account'));
+        return;
+      }
+      resolve(result);
+    });
+  });
+
+  return { needsConfirmation: true, username };
+}
+
+/**
+ * Confirm a Cognito sign-up with the emailed code, then sign in so the teacher
+ * lands in the app straight away.
+ * @throws {AuthError} INVALID_INPUT | NETWORK | CONFIRM_FAILED
+ */
+export async function confirmSignUp(username, code, password) {
+  const pool = userPool();
+  if (!pool) {
+    // Local mode never issues a confirmation step.
+    return signIn(username, password);
+  }
+  if (!username || !code) {
+    throw new AuthError('INVALID_INPUT', 'Enter the verification code from your email');
+  }
+
+  const user = new CognitoUser({ Username: username.trim(), Pool: pool });
+  await new Promise((resolve, reject) => {
+    user.confirmRegistration(code.trim(), true, (err, result) => {
+      if (err) {
+        const c = err?.code === 'NetworkError' ? 'NETWORK' : 'CONFIRM_FAILED';
+        reject(new AuthError(c, err?.message ?? 'Could not confirm the account'));
+        return;
+      }
+      resolve(result);
+    });
+  });
+
+  if (password) return signIn(username, password);
+  return null;
+}
+
+/** Re-send the Cognito sign-up verification code. No-op in local mode. */
+export async function resendConfirmationCode(username) {
+  const pool = userPool();
+  if (!pool) return;
+  const user = new CognitoUser({ Username: username.trim(), Pool: pool });
+  await new Promise((resolve, reject) => {
+    user.resendConfirmationCode((err, result) => {
+      if (err) reject(new AuthError('NETWORK', err?.message ?? 'Could not resend the code'));
+      else resolve(result);
+    });
+  });
 }
 
 /** The last session written to IndexedDB, valid or expired. */

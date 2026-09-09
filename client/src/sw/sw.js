@@ -8,9 +8,9 @@
  * is reproduced here.
  */
 
-import { precacheAndRoute, cleanupOutdatedCaches } from 'workbox-precaching';
+import { precacheAndRoute, cleanupOutdatedCaches, createHandlerBoundToURL } from 'workbox-precaching';
 import { clientsClaim } from 'workbox-core';
-import { registerRoute } from 'workbox-routing';
+import { registerRoute, NavigationRoute } from 'workbox-routing';
 import { NetworkFirst } from 'workbox-strategies';
 import { ExpirationPlugin } from 'workbox-expiration';
 
@@ -24,6 +24,16 @@ cleanupOutdatedCaches();
 
 // Injected at build time by vite-plugin-pwa.
 precacheAndRoute(self.__WB_MANIFEST || []);
+
+// Single-page app: every in-app navigation (including a deep link opened
+// offline) is served the precached index.html shell. `injectManifest` does not
+// add this automatically the way the generated SW would. /api/ is excluded so
+// data requests still hit the network / their own handler below.
+registerRoute(
+  new NavigationRoute(createHandlerBoundToURL('index.html'), {
+    denylist: [/^\/api\//],
+  }),
+);
 
 // API reads: serve from network, fall back to the last good response offline.
 registerRoute(

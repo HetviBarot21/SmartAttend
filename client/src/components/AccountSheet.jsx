@@ -10,6 +10,8 @@ export default function AccountSheet({
   online,
   pending,
   pinSession,
+  pinEnrolled,
+  onManagePin,
   onSignOut,
   onSimulateExpiry,
   onClose,
@@ -39,6 +41,15 @@ export default function AccountSheet({
           <span>Records awaiting sync</span>
           <strong>{pending}</strong>
         </div>
+
+        {onManagePin && (
+          <div className="sheet__row">
+            <span>Offline PIN{pinEnrolled ? '' : ' — not set'}</span>
+            <button type="button" className="linkbtn" onClick={onManagePin}>
+              {pinEnrolled ? 'Change' : 'Set up'}
+            </button>
+          </div>
+        )}
 
         {onSimulateExpiry && (
           <div className="sheet__row">

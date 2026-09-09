@@ -6,9 +6,11 @@ import { CapIcon } from './icons';
 /**
  * Offered once, immediately after the first successful online sign-in on a
  * device - the only moment we can be sure the teacher is who they claim to be
- * before the network disappears.
+ * before the network disappears. Also reachable any time afterwards from the
+ * account sheet (pass `changing` when a PIN already exists, and a `skipLabel`
+ * such as "Cancel" for that entry point).
  */
-export default function PinSetup({ onDone, onSkip }) {
+export default function PinSetup({ onDone, onSkip, changing = false, skipLabel = 'Not now' }) {
   const { enrolPin } = useAuth();
   const [pin, setPin] = useState('');
   const [confirm, setConfirm] = useState('');
@@ -43,11 +45,13 @@ export default function PinSetup({ onDone, onSkip }) {
     <div className="auth">
       <form className="auth__card" onSubmit={handleSubmit}>
         <div className="auth__logo"><CapIcon size={24} /></div>
-        <h1 className="auth__brand">Set an offline PIN</h1>
+        <h1 className="auth__brand">{changing ? 'Change your offline PIN' : 'Set an offline PIN'}</h1>
         <p className="auth__tagline">Keep working when the session expires</p>
         <p className="auth__help">
-          Your sign-in expires after one hour. A {PIN_LENGTH}-digit PIN lets you unlock
-          SmartAttend and keep recording attendance when there is no network.
+          {changing
+            ? `Choose a new ${PIN_LENGTH}-digit PIN. It replaces the current one on this device immediately.`
+            : `Your sign-in expires after one hour. A ${PIN_LENGTH}-digit PIN lets you unlock
+               SmartAttend and keep recording attendance when there is no network.`}
         </p>
 
         {error && <div className="notice notice--err" role="alert">{error}</div>}
@@ -92,7 +96,7 @@ export default function PinSetup({ onDone, onSkip }) {
 
         <div className="auth__foot">
           <button className="linkbtn" type="button" onClick={onSkip} disabled={busy}>
-            Not now
+            {skipLabel}
           </button>
         </div>
       </form>

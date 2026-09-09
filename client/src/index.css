@@ -324,7 +324,19 @@ input  { font-family: inherit; }
   height: 1px;
   background: var(--line);
 }
-.auth__foot { margin-top: 16px; text-align: center; }
+.auth__foot {
+  margin-top: 16px;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 6px 18px;
+}
+.auth__switch {
+  margin-top: 14px;
+  text-align: center;
+  font-size: 13px;
+  color: var(--ink-muted);
+}
 
 /* fields */
 

@@ -19,7 +19,7 @@ const CLASS_NAME = `${DEMO_CLASS.grade}${DEMO_CLASS.stream}`; // "Form 3B"
 const TITLES = { attendance: CLASS_NAME, heatmap: 'Heatmap', alerts: 'Alerts' };
 
 function TeacherApp() {
-  const { user, session, signOut, simulateExpiry } = useAuth();
+  const { user, session, pinState, signOut, simulateExpiry } = useAuth();
   const online = useOnlineStatus();
 
   const [tab, setTab] = useState('attendance');
@@ -27,6 +27,7 @@ function TeacherApp() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [pending, setPending] = useState(0);
   const [sheetOpen, setSheetOpen] = useState(false);
+  const [pinSetupOpen, setPinSetupOpen] = useState(false);
 
   const refreshPending = useCallback(async () => {
     setPending(await countPendingSync());
@@ -77,6 +78,17 @@ function TeacherApp() {
     );
   }
 
+  if (pinSetupOpen) {
+    return (
+      <PinSetup
+        changing={pinState.enrolled}
+        skipLabel="Cancel"
+        onDone={() => setPinSetupOpen(false)}
+        onSkip={() => setPinSetupOpen(false)}
+      />
+    );
+  }
+
   return (
     <div className="app">
       {account}
@@ -90,6 +102,8 @@ function TeacherApp() {
           online={online}
           pending={pending}
           pinSession={Boolean(session?.pinVerified)}
+          pinEnrolled={pinState.enrolled}
+          onManagePin={() => { setSheetOpen(false); setPinSetupOpen(true); }}
           onSignOut={() => { setSheetOpen(false); signOut(); }}
           onSimulateExpiry={
             import.meta.env.DEV
