@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
 import { createClass } from '../db/database';
+import { useAuth } from '../auth/AuthContext';
 
 /**
  * Reusable "create a class" form - used by the first-run SetupWizard and by
@@ -7,6 +8,7 @@ import { createClass } from '../db/database';
  * "<grade> <stream>" but can be overridden.
  */
 export default function CreateClassForm({ onCreated, onCancel, submitLabel = 'Create class' }) {
+  const { user } = useAuth();
   const [grade, setGrade] = useState('');
   const [stream, setStream] = useState('');
   const [year, setYear] = useState(String(new Date().getFullYear()));
@@ -30,6 +32,9 @@ export default function CreateClassForm({ onCreated, onCancel, submitLabel = 'Cr
         stream,
         name: name.trim() || undefined,
         academicYear: Number(year) || undefined,
+        teacherName: user?.displayName || user?.username || undefined,
+        schoolName: user?.schoolName || undefined,
+        ownerUsername: user?.username || undefined,
       });
       onCreated?.(cls);
     } catch (err) {
@@ -41,7 +46,7 @@ export default function CreateClassForm({ onCreated, onCancel, submitLabel = 'Cr
   return (
     <form className="card" onSubmit={handleSubmit}>
       <h2 className="card__title">Class details</h2>
-      <p className="card__hint">Name it however your school does — e.g. grade and stream.</p>
+      <p className="card__hint">Grade and stream, or whatever your school uses.</p>
 
       {error && <div className="notice notice--err" role="alert">{error}</div>}
 

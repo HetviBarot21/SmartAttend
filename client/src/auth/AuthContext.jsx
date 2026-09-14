@@ -67,8 +67,8 @@ export function AuthProvider({ children }) {
     return { session: next, pinEnrolled: await hasPin(username) };
   }, [applySession]);
 
-  const signUp = useCallback(async ({ name, email, password }) => {
-    const result = await cognitoSignUp({ name, email, password });
+  const signUp = useCallback(async ({ name, email, password, role, schoolName }) => {
+    const result = await cognitoSignUp({ name, email, password, role, schoolName });
     await clearLockout(email.trim());
     if (!result.needsConfirmation) await applySession(result.session);
     return result;
@@ -121,7 +121,16 @@ export function AuthProvider({ children }) {
     status,
     session,
     pinState,
-    user: session ? { username: session.username, displayName: session.displayName, roles: session.roles ?? [] } : null,
+    user: session
+      ? {
+          username: session.username,
+          displayName: session.displayName,
+          roles: session.roles ?? [],
+          role: session.role ?? 'teacher',
+          schoolId: session.schoolId ?? null,
+          schoolName: session.schoolName ?? null,
+        }
+      : null,
     cognitoConfigured: isCognitoConfigured(),
     signIn,
     signUp,

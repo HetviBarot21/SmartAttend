@@ -1,21 +1,32 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getStudentById, getStudentHistory } from '../db/database';
+import { getStudentById, getStudentHistory, getFollowUpSummary } from '../db/database';
 import {
   computeFeatures,
   scoreRisk,
-  breakdownRows,
   weeklyTrend,
   riskInsights,
   isAssessable,
-  isSchoolDay,
   toISO,
 } from '../lib/riskModel';
 import Avatar from './Avatar';
 import TopBar from './TopBar';
+import FollowUpPanel from './FollowUpPanel';
 import { AlertTriangleIcon, ChevronDownIcon } from './icons';
 
 const RISK_LABEL = { red: 'HIGH RISK', amber: 'AT RISK', green: 'ON TRACK' };
+const RISK_TAKEAWAY = {
+  red: 'Likely to keep missing school without a check-in.',
+  amber: 'Attendance has slipped. Worth a check-in soon.',
+};
 const INITIAL_HISTORY = 8;
+
+/** Plain-language read on the attendance_trend feature (rate_w1 - rate_w2). */
+function trendLabel(trend) {
+  if (trend == null) return null;
+  if (trend <= -0.1) return 'Getting worse';
+  if (trend >= 0.1) return 'Improving';
+  return 'Steady';
+}
 
 function fmtDate(iso) {
   const [y, m, d] = iso.split('-').map(Number);
@@ -76,6 +87,7 @@ export default function StudentProfile({ studentId, className, onBack }) {
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showAll, setShowAll] = useState(false);
+  const [followUp, setFollowUp] = useState({ lastAt: new Map() });
 
   useEffect(() => {
     let cancelled = false;
@@ -90,6 +102,12 @@ export default function StudentProfile({ studentId, className, onBack }) {
     return () => { cancelled = true; };
   }, [studentId]);
 
+  useEffect(() => {
+    let cancelled = false;
+    getFollowUpSummary([studentId]).then((summary) => { if (!cancelled) setFollowUp(summary); });
+    return () => { cancelled = true; };
+  }, [studentId]);
+
   const model = useMemo(() => {
     const asOf = toISO(new Date());
     const rows = history.map((r) => ({ date: r.date, status: r.status }));
@@ -98,17 +116,13 @@ export default function StudentProfile({ studentId, className, onBack }) {
     const trend = weeklyTrend(rows, asOf, 6);
     const insights = riskInsights(rows, features, risk, asOf);
 
-    // crude confidence proxy: more observed school days ⇒ steadier estimate
-    const observed = rows.filter((r) => isSchoolDay(r.date)).length;
-    const confidence = Math.min(0.95, 0.55 + observed / 200);
-
-    return { features, risk, trend, insights, confidence, assessable: isAssessable(rows) };
+    return { features, risk, trend, insights, assessable: isAssessable(rows) };
   }, [history]);
 
   if (loading) return <ProfilePage title="Profile" onBack={onBack}><p className="empty">Loading profile…</p></ProfilePage>;
   if (!student) return <ProfilePage title="Profile" onBack={onBack}><p className="empty">Student not found.</p></ProfilePage>;
 
-  const { risk, trend, insights, confidence, features, assessable } = model;
+  const { risk, trend, insights, features, assessable } = model;
   const enrolled = student.enrolledAt ? fmtDate(student.enrolledAt).long : '—';
   const recent = [...history].reverse();
   const shown = showAll ? recent : recent.slice(0, INITIAL_HISTORY);
@@ -136,36 +150,67 @@ export default function StudentProfile({ studentId, className, onBack }) {
           )}
         </div>
 
+        {assessable && risk.flag !== 'green' && (
+          <div className={`followup-badge followup-badge--${followUp.lastAt.has(studentId) ? 'done' : 'needed'}`} style={{ marginTop: 10 }}>
+            {followUp.lastAt.has(studentId)
+              ? `Followed up ${new Date(followUp.lastAt.get(studentId)).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`
+              : 'Not yet followed up'}
+          </div>
+        )}
+
         {assessable ? (
           <div className={`dropout dropout--${risk.flag}`}>
             <div className="dropout__value">{Math.round(risk.dropoutProbability * 100)}%</div>
-            <div className="dropout__label">modelled absenteeism risk</div>
+            <div className="dropout__label">risk of continued absence</div>
+            {RISK_TAKEAWAY[risk.flag] && <div className="dropout__takeaway">{RISK_TAKEAWAY[risk.flag]}</div>}
           </div>
         ) : (
           <div className="dropout">
             <div className="dropout__label" style={{ marginTop: 0 }}>
-              Not enough recorded attendance yet to assess risk. Keep marking the roll —
-              a flag appears after about two weeks of history.
+              Not enough attendance yet to assess risk. A flag appears after about two weeks.
             </div>
           </div>
         )}
       </div>
 
+      {assessable && risk.flag !== 'green' && (
+        <FollowUpPanel
+          studentId={studentId}
+          flag={risk.flag}
+          student={student}
+          onStudentUpdated={(updated) => setStudent((s) => ({ ...s, ...updated }))}
+        />
+      )}
+
       {assessable && (
       <div className="card">
-        <h2 className="card__title">Risk score breakdown</h2>
-        <p className="card__hint">Weighted components of the rule-based score</p>
-        <div className="breakdown">
-          {breakdownRows(risk.components).map((row) => (
-            <div key={row.key} className="breakdown__row">
-              <span className="breakdown__name">{row.label}</span>
-              <span className="breakdown__num">{row.value.toFixed(2)}</span>
-              <span className="breakdown__track">
-                <span className="breakdown__fill" style={{ width: `${row.value * 100}%` }} />
-              </span>
+        <h2 className="card__title">Why this student is flagged</h2>
+
+        <div className="fact-row">
+          {features.attendance_rate_w1 != null && (
+            <div className="fact-chip">
+              <span className="fact-chip__value">{Math.round(features.attendance_rate_w1 * 100)}%</span>
+              <span className="fact-chip__label">present, last 2 weeks</span>
             </div>
-          ))}
+          )}
+          <div className="fact-chip">
+            <span className="fact-chip__value">{features.longest_absence_streak}</span>
+            <span className="fact-chip__label">day{features.longest_absence_streak === 1 ? '' : 's'} away in a row</span>
+          </div>
+          {trendLabel(features.attendance_trend) && (
+            <div className="fact-chip">
+              <span className="fact-chip__value">{trendLabel(features.attendance_trend)}</span>
+              <span className="fact-chip__label">trend</span>
+            </div>
+          )}
         </div>
+
+        {insights.map((text, i) => (
+          <div key={i} className="insight">
+            <span className="insight__icon"><AlertTriangleIcon size={15} /></span>
+            <span>{text}</span>
+          </div>
+        ))}
       </div>
       )}
 
@@ -174,30 +219,6 @@ export default function StudentProfile({ studentId, className, onBack }) {
         <p className="card__hint">Weekly attendance rate</p>
         <TrendChart points={trend} />
       </div>
-
-      {assessable && (
-      <div className="card">
-        <h2 className="card__title">Prediction analysis</h2>
-        <p className="card__hint">
-          Rule-based scorer · confidence {Math.round(confidence * 100)}%
-        </p>
-        {insights.map((text, i) => (
-          <div key={i} className="insight">
-            <span className="insight__icon"><AlertTriangleIcon size={15} /></span>
-            <span>{text}</span>
-          </div>
-        ))}
-        {features.attendance_rate_w1 != null && (
-          <div className="insight">
-            <span className="insight__icon"><AlertTriangleIcon size={15} /></span>
-            <span>
-              Current 2-week attendance {Math.round(features.attendance_rate_w1 * 100)}%,
-              longest absence streak {features.longest_absence_streak} day(s).
-            </span>
-          </div>
-        )}
-      </div>
-      )}
 
       <div className="card">
         <h2 className="card__title">Attendance history</h2>

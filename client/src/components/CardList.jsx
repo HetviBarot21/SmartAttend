@@ -32,7 +32,7 @@ export default function CardList({ students, className, onClose }) {
 
         <div className="cardlist-sheet">
           <div className="cardlist-sheet__head">
-            <h1>{className} — RFID cards</h1>
+            <h1>{className} RFID cards</h1>
             <p>{rows.length} students · generated {issued}</p>
           </div>
           <table className="cardlist-table">

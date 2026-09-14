@@ -48,6 +48,7 @@
   --font:       system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
 
   --nav-h:      62px;
+  --sidenav-w:  228px;
 }
 
 * { box-sizing: border-box; }
@@ -67,10 +68,24 @@ input  { font-family: inherit; }
 
 /* ============================================================= app shell === */
 
+/*
+ * .shell is the outer row: SideNav (desktop only, see the >=768px block near
+ * the bottom of this file) + .app. At phone width SideNav is display:none, so
+ * .app's own `margin: 0 auto` centers it in .shell exactly as it did before
+ * .shell existed. At desktop, flexbox auto-margins center .app in whatever
+ * width is left after SideNav's fixed width - no extra centering math needed.
+ */
+.shell {
+  display: flex;
+  min-height: 100%;
+  background: var(--canvas);
+}
+
 .app {
   position: relative;
   width: 100%;
   max-width: 480px;
+  min-width: 0;
   margin: 0 auto;
   min-height: 100%;
   background: var(--canvas);
@@ -706,6 +721,11 @@ input  { font-family: inherit; }
 .alert-card__name { font-size: 14.5px; font-weight: 800; }
 .alert-card__meta { font-size: 11.5px; color: var(--ink-muted); margin-top: 1px; }
 .alert-card__body { font-size: 13px; line-height: 1.5; color: var(--ink-soft); margin: 10px 0 12px; }
+.alert-card__contact { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+.alert-card__contact a {
+  display: inline-flex; align-items: center; gap: 5px;
+  font-size: 12px; font-weight: 700; color: var(--indigo-600); text-decoration: none;
+}
 .alert-card__foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
 .alert-card__risk { font-size: 12px; font-weight: 700; color: var(--ink-soft); display: inline-flex; align-items: center; gap: 6px; }
 .alert-card__risk b { color: var(--ink); }
@@ -728,13 +748,19 @@ input  { font-family: inherit; }
 .dropout__label { font-size: 12px; color: var(--ink-muted); margin-top: 2px; }
 .dropout--red   .dropout__value { color: var(--risk-red); }
 .dropout--amber .dropout__value { color: var(--risk-amber); }
+.dropout__takeaway { font-size: 13px; color: var(--ink-soft); margin-top: 8px; }
 
-.breakdown { display: flex; flex-direction: column; gap: 12px; }
-.breakdown__row { display: grid; grid-template-columns: 1fr auto; gap: 4px 10px; align-items: center; }
-.breakdown__name { font-size: 13px; color: var(--ink-soft); }
-.breakdown__num { font-size: 13px; font-weight: 800; font-variant-numeric: tabular-nums; }
-.breakdown__track { grid-column: 1 / -1; height: 7px; border-radius: var(--radius-pill); background: var(--line); overflow: hidden; }
-.breakdown__fill { height: 100%; border-radius: var(--radius-pill); background: var(--slate-600); }
+.fact-row { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.fact-chip {
+  flex: 1;
+  min-width: 96px;
+  text-align: center;
+  background: var(--canvas-in);
+  border-radius: var(--radius-sm);
+  padding: 10px 8px;
+}
+.fact-chip__value { display: block; font-size: 17px; font-weight: 800; }
+.fact-chip__label { display: block; font-size: 11px; color: var(--ink-muted); margin-top: 2px; }
 
 .trend-chart { width: 100%; height: 140px; display: block; }
 .trend-axis { font-size: 10px; fill: var(--ink-muted); }
@@ -856,11 +882,205 @@ input  { font-family: inherit; }
   letter-spacing: 0.05em;
 }
 
+/* ========================================================= role picker === */
+
+.role-picker { display: flex; gap: 8px; }
+.role-picker__opt {
+  flex: 1;
+  text-align: left;
+  border: 1.5px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  padding: 10px 12px;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.role-picker__opt strong { font-size: 13.5px; }
+.role-picker__opt span { font-size: 11.5px; color: var(--ink-muted); line-height: 1.35; }
+.role-picker__opt--active { border-color: var(--indigo-600); background: var(--indigo-tint); }
+
+/* ======================================================== roster extras === */
+
+.roster-actions { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 12px; }
+.roster-actions .btn--secondary { flex: 1; min-width: 180px; }
+
+/* ========================================================= guardian contact === */
+
+.guardian-contact {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--canvas-in);
+  border-radius: var(--radius-sm);
+  margin-bottom: 14px;
+  font-size: 13px;
+}
+.guardian-contact__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--indigo-600);
+  font-weight: 700;
+  text-decoration: none;
+}
+.guardian-contact__missing { color: var(--ink-muted); }
+.guardian-contact--edit { flex-direction: column; align-items: stretch; }
+.guardian-contact__actions { display: flex; gap: 10px; align-items: center; }
+
+/* ============================================================ follow-ups === */
+
+.followup-form { display: flex; flex-direction: column; gap: 10px; }
+.followup-history { margin-top: 14px; display: flex; flex-direction: column; gap: 10px; }
+.followup-history__row { display: flex; gap: 9px; font-size: 12.5px; }
+.followup-history__icon { flex: none; color: var(--present); margin-top: 1px; }
+.followup-history__method { font-weight: 700; color: var(--ink); }
+.followup-history__note { color: var(--ink-soft); margin-top: 1px; }
+.followup-history__when { color: var(--ink-muted); font-size: 11px; margin-top: 1px; }
+
+.followup-badge { font-size: 11px; font-weight: 700; white-space: nowrap; }
+.followup-badge--done   { color: var(--present); }
+.followup-badge--needed { color: var(--risk-red); }
+div.followup-badge {
+  display: inline-block;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--canvas-in);
+}
+
+/* ========================================================= admin screens === */
+
+.section-heading { margin: 22px 0 10px; font-size: 15px; font-weight: 800; }
+
+.admin-stats { display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; }
+.stat-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px;
+}
+.stat-card__value { font-size: 24px; font-weight: 800; font-variant-numeric: tabular-nums; }
+.stat-card__label { font-size: 11.5px; color: var(--ink-muted); margin-top: 2px; }
+.stat-card--risk .stat-card__value { color: var(--risk-red); }
+
+.admin-table { display: flex; flex-direction: column; gap: 8px; }
+.admin-table__row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--ink-muted);
+}
+.admin-table__row:hover { border-color: var(--indigo-200); background: var(--indigo-tint); }
+.admin-table__name { flex: 1; min-width: 0; font-size: 14px; font-weight: 700; color: var(--ink); }
+.admin-table__meta { font-size: 12px; white-space: nowrap; }
+
+.admin-grid { display: flex; flex-direction: column; }
+
+/* ============================================================== side nav === */
+
+.side-nav {
+  display: none; /* shown at desktop widths, see the min-width:768px block below */
+  flex-direction: column;
+  width: var(--sidenav-w);
+  flex: none;
+  padding: 22px 14px;
+  border-right: 1px solid var(--line);
+  background: var(--surface);
+  position: sticky;
+  top: 0;
+  align-self: flex-start;
+  height: 100vh;
+  overflow-y: auto;
+}
+.side-nav__brand {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 15px;
+  font-weight: 800;
+  color: var(--ink);
+  padding: 4px 10px 20px;
+}
+.side-nav__class {
+  text-align: left;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--canvas-in);
+  padding: 10px 12px;
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--ink);
+  cursor: pointer;
+  margin-bottom: 18px;
+}
+.side-nav__items { display: flex; flex-direction: column; gap: 2px; flex: 1; }
+.side-nav__item {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  border: none;
+  background: none;
+  border-radius: var(--radius-sm);
+  padding: 11px 12px;
+  font-size: 13.5px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  cursor: pointer;
+  text-align: left;
+}
+.side-nav__item:hover { background: var(--canvas-in); }
+.side-nav__item[aria-current="page"] { background: var(--indigo-100); color: var(--slate-800); }
+.side-nav__item--muted { color: var(--ink-muted); font-weight: 600; margin-top: 10px; border-top: 1px solid var(--line-soft); padding-top: 14px; border-radius: 0; }
+
+/* ===================================================== desktop / laptop === */
+
+@media (min-width: 768px) {
+  .bottom-nav { display: none; }
+  .side-nav { display: flex; }
+
+  .app { max-width: 880px; }
+  .app__scroll { padding: 20px 36px 40px; }
+
+  /* The mobile roll-call submit bar docks above the bottom nav; at desktop
+     there is no bottom nav to dock above, so it sits in the normal flow
+     instead of trying to stay viewport-centered next to a sidebar. */
+  .rollbar {
+    position: static;
+    left: auto;
+    transform: none;
+    bottom: auto;
+    width: 100%;
+    max-width: none;
+    padding: 14px 0 4px;
+    margin-top: 8px;
+    border-top: 1px solid var(--line);
+  }
+
+  .admin-stats { grid-template-columns: repeat(5, 1fr); }
+  .admin-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
+
+  .sheet-backdrop { align-items: center; }
+  .sheet { max-width: 420px; border-radius: 20px; }
+
+  .auth { padding: 40px; }
+}
+
 @media print {
   body { background: #fff; }
   .no-print,
   .topbar,
-  .bottom-nav { display: none !important; }
+  .bottom-nav,
+  .side-nav { display: none !important; }
   .app__scroll { padding: 0; }
   .cardlist-sheet { border: none; padding: 0; }
   .cardlist-table th,

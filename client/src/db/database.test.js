@@ -22,7 +22,11 @@ import {
   updateClass,
   archiveClass,
   classLabel,
-  todayISO
+  todayISO,
+  countPendingRosterSync,
+  addFollowUp,
+  getFollowUpsForStudent,
+  getFollowUpSummary,
 } from './database';
 
 const DATE = '2026-08-27';
@@ -290,6 +294,16 @@ describe('roster management', () => {
     const updated = await updateStudent(s.studentId, { fullName: '  New Name  ', admissionNo: '' });
     expect(updated).toMatchObject({ fullName: 'New Name', admissionNo: null });
   });
+
+  it('stores and updates guardian phone/email', async () => {
+    const s = await addStudent({
+      classGroupId: CLASS, fullName: 'Has Guardian', guardianPhone: '0712345678', guardianEmail: 'g@example.com',
+    });
+    expect(s).toMatchObject({ guardianPhone: '0712345678', guardianEmail: 'g@example.com' });
+
+    const updated = await updateStudent(s.studentId, { guardianPhone: '0700000000', guardianEmail: '' });
+    expect(updated).toMatchObject({ guardianPhone: '0700000000', guardianEmail: null });
+  });
 });
 
 describe('RFID cards', () => {
@@ -374,6 +388,39 @@ describe('classes', () => {
     expect((await getClassById(a.classGroupId)).name).toBe('Alpha Renamed');
   });
 
+  it('scopes classes to the signed-in account - one account never sees another\'s roster', async () => {
+    await createClass({ name: 'Alice Class', ownerUsername: 'alice' });
+    await createClass({ name: 'Bob Class', ownerUsername: 'bob' });
+
+    expect((await getClasses({ ownerUsername: 'alice' })).map((c) => c.name)).toEqual(['Alice Class']);
+    expect((await getClasses({ ownerUsername: 'bob' })).map((c) => c.name)).toEqual(['Bob Class']);
+    expect((await getClasses({ ownerUsername: 'carol' }))).toEqual([]); // a brand new account starts empty
+  });
+
+  it('the shared demo class is visible to every account', async () => {
+    await db.classGroups.add({
+      classGroupId: 'class-demo-x', schoolId: 'school-kibera-001', name: 'Demo Class',
+      active: true, createdAt: new Date().toISOString(), demo: true,
+    });
+    await createClass({ name: 'Alice Class', ownerUsername: 'alice' });
+
+    const forAlice = await getClasses({ ownerUsername: 'alice' });
+    const forBob = await getClasses({ ownerUsername: 'bob' });
+    expect(forAlice.map((c) => c.name).sort()).toEqual(['Alice Class', 'Demo Class']);
+    expect(forBob.map((c) => c.name)).toEqual(['Demo Class']);
+  });
+
+  it('claims a pre-existing ownerless class for the first account that loads it', async () => {
+    await db.classGroups.add({
+      classGroupId: 'class-legacy', schoolId: 'school-local-001', name: 'Legacy Class',
+      active: true, createdAt: new Date().toISOString(),
+    });
+
+    expect((await getClasses({ ownerUsername: 'alice' })).map((c) => c.name)).toEqual(['Legacy Class']);
+    // now claimed by alice - bob must not see it, even though it was ownerless a moment ago
+    expect((await getClasses({ ownerUsername: 'bob' }))).toEqual([]);
+  });
+
   it('archiveClass soft-deletes a class that has students', async () => {
     const cls = await createClass({ name: 'Has Students' });
     await addStudent({ classGroupId: cls.classGroupId, fullName: 'Kid' });
@@ -396,6 +443,73 @@ describe('getAttendanceForDate', () => {
 
     const rows = await getAttendanceForDate('class-A', DATE);
     expect(rows.map((r) => r.studentId)).toEqual(['stu-1']);
+  });
+});
+
+describe('roster sync queue', () => {
+  it('queues a school + class push when a class is created', async () => {
+    await createClass({ grade: 'Form 3', stream: 'B' });
+    const queued = await db.rosterSyncQueue.toArray();
+    expect(queued.map((q) => q.path)).toEqual(['/api/roster/schools', '/api/roster/classes']);
+    expect(queued.every((q) => q.status === 'pending')).toBe(true);
+    expect(await countPendingRosterSync()).toBe(2);
+  });
+
+  it('queues a student + card push when a student is enrolled', async () => {
+    const cls = await createClass({ grade: 'Form 3', stream: 'B' });
+    await db.rosterSyncQueue.clear();
+
+    const s = await addStudent({ classGroupId: cls.classGroupId, fullName: 'Amina' });
+    const queued = await db.rosterSyncQueue.toArray();
+    expect(queued.map((q) => q.path)).toEqual(['/api/roster/students', `/api/roster/students/${s.studentId}/card`]);
+  });
+
+  it('queues a PATCH with active:false when a student is removed', async () => {
+    const cls = await createClass({ grade: 'Form 3', stream: 'B' });
+    const s = await addStudent({ classGroupId: cls.classGroupId, fullName: 'Amina' });
+    await db.rosterSyncQueue.clear();
+
+    await removeStudent(s.studentId);
+    const queued = await db.rosterSyncQueue.toArray();
+    expect(queued).toHaveLength(1);
+    expect(queued[0]).toMatchObject({ method: 'PATCH', path: `/api/roster/students/${s.studentId}`, body: { active: false } });
+  });
+});
+
+describe('follow-ups', () => {
+  it('logs a follow-up and queues it for the server', async () => {
+    const record = await addFollowUp({ studentId: 'stu-1', flag: 'red', method: 'parent_call', note: 'Spoke to guardian', actorId: 'teacher.a' });
+    expect(record.followUpId).toMatch(/^fu-/);
+
+    const history = await getFollowUpsForStudent('stu-1');
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({ method: 'parent_call', note: 'Spoke to guardian' });
+
+    const queued = await db.rosterSyncQueue.toArray();
+    expect(queued).toHaveLength(1);
+    expect(queued[0].path).toBe('/api/admin/students/stu-1/follow-ups');
+  });
+
+  it('rejects an invalid flag or method', async () => {
+    await expect(addFollowUp({ studentId: 'stu-1', flag: 'green', method: 'parent_call' })).rejects.toThrow(/flag must be/);
+    await expect(addFollowUp({ studentId: 'stu-1', flag: 'red', method: 'carrier_pigeon' })).rejects.toThrow(/method must be/);
+  });
+
+  it('getFollowUpSummary reports needsFollowUp for students with no recent follow-up', async () => {
+    await addFollowUp({ studentId: 'stu-1', flag: 'red', method: 'parent_call' });
+
+    const summary = await getFollowUpSummary(['stu-1', 'stu-2']);
+    expect(summary.needsFollowUp.has('stu-1')).toBe(false);
+    expect(summary.needsFollowUp.has('stu-2')).toBe(true);
+    expect(summary.lastAt.has('stu-1')).toBe(true);
+  });
+
+  it('a stale follow-up (older than freshDays) still counts as needing one', async () => {
+    const staleIso = new Date(Date.now() - 30 * 86_400_000).toISOString();
+    await db.followUps.add({ followUpId: 'fu-old', studentId: 'stu-1', flag: 'amber', method: 'sms', note: null, actorId: null, createdAt: staleIso });
+
+    const summary = await getFollowUpSummary(['stu-1'], 14);
+    expect(summary.needsFollowUp.has('stu-1')).toBe(true);
   });
 });
 

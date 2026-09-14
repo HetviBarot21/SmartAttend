@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS class_groups (
   grade          TEXT NOT NULL,
   stream         TEXT,
   academic_year  INTEGER NOT NULL,
+  teacher_name   TEXT,
   created_at     TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -41,6 +42,8 @@ CREATE TABLE IF NOT EXISTS students (
   class_group_id TEXT NOT NULL REFERENCES class_groups(class_group_id) ON DELETE CASCADE,
   admission_no   TEXT NOT NULL,
   full_name      TEXT NOT NULL,
+  guardian_phone TEXT,
+  guardian_email TEXT,
   enrolled_at    TEXT NOT NULL DEFAULT (date('now')),
   active         INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0, 1))
 );
@@ -126,3 +129,19 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 
 CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action);
+
+-- One row per time a teacher/admin reaches out about a flagged student. There is
+-- no "resolved" workflow - a fresh flag after a gap simply gets a fresh row.
+-- getFlaggedStudents() treats a student as "needs follow-up" when their most
+-- recent row (if any) is older than FOLLOW_UP_FRESH_DAYS (src/lib/riskModel.js).
+CREATE TABLE IF NOT EXISTS follow_ups (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  student_id   TEXT NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
+  flag         TEXT NOT NULL CHECK (flag IN ('amber', 'red')),
+  method       TEXT NOT NULL CHECK (method IN ('parent_call', 'sms', 'home_visit', 'meeting', 'other')),
+  note         TEXT,
+  actor        TEXT,                                  -- teacher/admin username
+  created_at   TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_followups_student ON follow_ups(student_id, created_at);

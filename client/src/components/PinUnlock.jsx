@@ -81,8 +81,7 @@ export default function PinUnlock() {
 
         <h2 className="auth__legend">Enter your PIN</h2>
         <p className="auth__help">
-          Your one-hour sign-in has expired. Enter your {PIN_LENGTH}-digit PIN to keep
-          recording attendance — no internet needed.
+          Your sign-in expired. Enter your {PIN_LENGTH}-digit PIN to keep going, no internet needed.
         </p>
 
         {error && <div className="notice notice--err" role="alert">{error}</div>}

@@ -2,6 +2,8 @@ import express from 'express';
 import morgan from 'morgan';
 import { createCardHandler } from './attendance/handler.js';
 import { createSyncRouter } from './routes/sync.js';
+import { createRosterRouter } from './routes/roster.js';
+import { createAdminRouter } from './routes/admin.js';
 import {
   getAttendanceForDate,
   getRecentChallenges,
@@ -49,6 +51,11 @@ export function createApp({ db, cardHandler = createCardHandler({ db }), logger 
   // Inbound sync from the offline PWA. Lands records in attendance_events +
   // sync_queue; src/workers/syncWorker.js pushes them on to AWS.
   app.use('/api/sync', createSyncRouter({ db }));
+
+  // Roster upserts pushed from the PWA (schools/classes/students/cards), and
+  // the cross-class/cross-teacher admin reporting built on top of them.
+  app.use('/api/roster', createRosterRouter({ db }));
+  app.use('/api/admin', createAdminRouter({ db }));
 
   // Manually fire one scan - lets the demo show an outcome without waiting for
   // the 5s emitter tick. Body: { "cardUid": "04A1B2C3" }

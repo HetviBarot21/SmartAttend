@@ -113,7 +113,7 @@ export default function SetupWizard({ onDone }) {
             />
           </div>
           <p className="card__hint" style={{ margin: '0 0 10px' }}>
-            An RFID card number is issued automatically — print the list onto cards from the roster later.
+An RFID card number is issued automatically. Print cards from the roster later.
           </p>
           <button className="btn btn--secondary" type="submit" disabled={busy || name.trim() === ''}>
             Enrol student
@@ -146,7 +146,7 @@ export default function SetupWizard({ onDone }) {
           onClick={() => onDone(cls.classGroupId)}
           disabled={busy}
         >
-          {students.length === 0 ? 'Skip for now — go to the app' : `Done — ${students.length} student${students.length === 1 ? '' : 's'}`}
+          {students.length === 0 ? 'Skip for now' : `Done, ${students.length} student${students.length === 1 ? '' : 's'}`}
         </button>
       </div>
     </div>

@@ -11,13 +11,16 @@ import Heatmap from './components/Heatmap';
 import Alerts from './components/Alerts';
 import StudentProfile from './components/StudentProfile';
 import BottomNav from './components/BottomNav';
+import SideNav from './components/SideNav';
+import AdminOverview from './components/AdminOverview';
+import AdminClassDetail from './components/AdminClassDetail';
 import TopBar from './components/TopBar';
 import AccountSheet from './components/AccountSheet';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
 import { countPendingSync, getClasses, classLabel } from './db/database';
 import { requestBackgroundSync } from './services/syncService';
 
-const STATIC_TITLES = { heatmap: 'Heatmap', alerts: 'Alerts' };
+const STATIC_TITLES = { heatmap: 'Heatmap', alerts: 'Alerts', overview: 'School Overview' };
 
 const ACTIVE_CLASS_KEY = 'smartattend:activeClass';
 const readActiveClass = () => {
@@ -39,19 +42,21 @@ function TeacherApp() {
   const [pinSetupOpen, setPinSetupOpen] = useState(false);
   const [rosterOpen, setRosterOpen] = useState(false);
   const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [adminClassId, setAdminClassId] = useState(null);
+  const role = user?.role ?? 'teacher';
 
   const [classes, setClasses] = useState(null); // null = still loading
   const [activeClassId, setActiveClassId] = useState(null);
 
   const loadClasses = useCallback(async () => {
-    const list = await getClasses();
+    const list = await getClasses({ ownerUsername: user?.username });
     setClasses(list);
     setActiveClassId((current) => {
       const stored = current ?? readActiveClass();
       const stillValid = list.some((c) => c.classGroupId === stored);
       return stillValid ? stored : (list[0]?.classGroupId ?? null);
     });
-  }, []);
+  }, [user?.username]);
 
   useEffect(() => { loadClasses(); }, [loadClasses, refreshKey]);
 
@@ -124,8 +129,14 @@ function TeacherApp() {
     );
   }
 
+  if (adminClassId) {
+    return <AdminClassDetail classGroupId={adminClassId} onBack={() => setAdminClassId(null)} />;
+  }
+
   let body;
-  if (tab === 'heatmap') {
+  if (tab === 'overview') {
+    body = <AdminOverview onOpenClass={setAdminClassId} />;
+  } else if (tab === 'heatmap') {
     body = <Heatmap key={activeClassId} classGroupId={activeClassId} />;
   } else if (tab === 'alerts') {
     body = <Alerts key={activeClassId} classGroupId={activeClassId} className={activeLabel} onOpenProfile={openProfile} />;
@@ -142,16 +153,26 @@ function TeacherApp() {
   }
 
   return (
-    <div className="app">
-      <TopBar
-        title={tab === 'attendance' ? activeLabel : STATIC_TITLES[tab]}
-        onTitleClick={tab === 'attendance' ? () => setSwitcherOpen(true) : undefined}
-        online={online}
-        onAccount={() => setSheetOpen(true)}
+    <div className="shell">
+      <SideNav
+        active={tab}
+        onChange={goTab}
+        role={role}
+        classLabel={activeLabel}
+        onSwitchClass={() => setSwitcherOpen(true)}
+        onManageRoster={() => setRosterOpen(true)}
       />
-      <div className="app__scroll">{body}</div>
+      <div className="app">
+        <TopBar
+          title={tab === 'attendance' ? activeLabel : STATIC_TITLES[tab]}
+          onTitleClick={tab === 'attendance' ? () => setSwitcherOpen(true) : undefined}
+          online={online}
+          onAccount={() => setSheetOpen(true)}
+        />
+        <div className="app__scroll">{body}</div>
 
-      <BottomNav active={tab} onChange={goTab} />
+        <BottomNav active={tab} onChange={goTab} role={role} />
+      </div>
 
       {switcherOpen && (
         <ClassSwitcher

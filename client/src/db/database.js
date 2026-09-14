@@ -44,6 +44,19 @@ db.version(2).stores({
   }
 });
 
+// v3 - central admin / multi-teacher support.
+// rosterSyncQueue: roster writes (schools/classes/students/cards) waiting to
+//   reach the server's shared roster tables - the same offline-first pattern
+//   as syncQueue, but for roster rather than attendance (see
+//   services/rosterSyncService.js). No new indexes are needed on existing
+//   tables, so no .upgrade() migration is required for this bump.
+// followUps: local log of contact attempts for a flagged student, mirrored to
+//   the server via rosterSyncQueue so the admin dashboard sees the same log.
+db.version(3).stores({
+  rosterSyncQueue: '++id, status, createdAt, attemptCount',
+  followUps: '++id, &followUpId, studentId, createdAt',
+});
+
 export const ATTENDANCE_STATUSES = ['present', 'absent', 'late'];
 
 /** Raised when a record for this student/date already exists. */
@@ -62,7 +75,8 @@ export function todayISO(now = new Date()) {
   return new Date(now.getTime() - offset).toISOString().split('T')[0];
 }
 
-function newId() {
+/** UUID v4. Exported for callers (e.g. seedData.js) that need a sync-schema-valid eventId. */
+export function newId() {
   // crypto.randomUUID is unavailable on http:// origins in older Android WebViews.
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
@@ -269,11 +283,50 @@ export async function getStudentById(studentId) {
 
 export const LOCAL_SCHOOL_ID = 'school-local-001';
 
-/** Every class on this device, newest first. Archived classes are excluded unless asked for. */
-export async function getClasses({ includeArchived = false } = {}) {
+/**
+ * Queue a roster write to reach the server's shared schools/class_groups/
+ * students tables (server/src/routes/roster.js) - the offline-first
+ * counterpart of `addAttendanceEvent`'s `syncQueue` row, drained by
+ * `services/rosterSyncService.js` on reconnect. Call *inside* the same Dexie
+ * transaction as the local write it describes (Dexie transactions are
+ * ambient - no explicit tx handle needed), so the two can never diverge.
+ */
+function queueRosterPush({ method = 'POST', path, body }) {
+  return db.rosterSyncQueue.add({
+    method, path, body, status: 'pending', createdAt: new Date().toISOString(), attemptCount: 0,
+  });
+}
+
+/**
+ * Every class belonging to the signed-in account on this device, newest
+ * first - plus the shared demo class (`demo: true`), which anyone can load to
+ * explore the app. Archived classes are excluded unless asked for.
+ *
+ * A device can be shared by several teachers signing in and out in turn (a
+ * staff room tablet, say), so classes are scoped to `ownerUsername`, not just
+ * "whatever is in this device's IndexedDB" - otherwise the next person to
+ * sign in would land straight in the previous teacher's roster instead of
+ * setting up their own.
+ *
+ * Classes created before this scoping existed have no `ownerUsername`; the
+ * first account to call this after upgrading claims them (rather than the
+ * classes silently vanishing for everyone), and they stay that account's
+ * from then on.
+ *
+ * @param {{includeArchived?: boolean, ownerUsername?: string}} [opts]
+ */
+export async function getClasses({ includeArchived = false, ownerUsername } = {}) {
+  if (ownerUsername) {
+    const orphaned = await db.classGroups.filter((c) => !c.demo && !c.ownerUsername).toArray();
+    for (const c of orphaned) {
+      await db.classGroups.update(c.id, { ownerUsername });
+    }
+  }
+
   const rows = await db.classGroups.toArray();
   return rows
     .filter((c) => includeArchived || c.active !== false)
+    .filter((c) => !ownerUsername || c.demo || c.ownerUsername === ownerUsername)
     .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''));
 }
 
@@ -290,7 +343,8 @@ export function classLabel(cls) {
 
 /**
  * Create a class group (setup wizard / "New class").
- * @param {{grade?:string, stream?:string, academicYear?:number, name?:string, schoolId?:string}} input
+ * @param {{grade?:string, stream?:string, academicYear?:number, name?:string, schoolId?:string,
+ *           schoolName?:string, teacherName?:string, ownerUsername?:string}} input
  */
 export async function createClass(input = {}) {
   const grade = String(input.grade ?? '').trim();
@@ -301,22 +355,35 @@ export async function createClass(input = {}) {
 
   const classGroupId = `class-${newId()}`;
   const now = new Date().toISOString();
+  const schoolId = input.schoolId || LOCAL_SCHOOL_ID;
+  const academicYear = input.academicYear ?? new Date().getFullYear();
+  const teacherName = input.teacherName || null;
   const record = {
     classGroupId,
-    schoolId: input.schoolId || LOCAL_SCHOOL_ID,
+    schoolId,
     grade: grade || null,
     stream: stream || null,
     name,
-    academicYear: input.academicYear ?? new Date().getFullYear(),
+    academicYear,
+    teacherName,
+    ownerUsername: input.ownerUsername || null,
     active: true,
     createdAt: now,
   };
 
-  await db.transaction('rw', db.classGroups, db.auditLog, async () => {
+  await db.transaction('rw', db.classGroups, db.auditLog, db.rosterSyncQueue, async () => {
     await db.classGroups.add(record);
     await db.auditLog.add({
       action: 'class.created', actorId: null, recordId: classGroupId, timestamp: now,
       detail: JSON.stringify({ name, grade, stream }),
+    });
+    // The class push needs the school row to exist first; queued in the same
+    // order, drained strictly in order, so this dependency is respected
+    // without any explicit "has the school synced yet" check.
+    await queueRosterPush({ path: '/api/roster/schools', body: { schoolId, name: input.schoolName || 'My School' } });
+    await queueRosterPush({
+      path: '/api/roster/classes',
+      body: { classGroupId, schoolId, grade: grade || 'Class', stream: stream || null, academicYear, teacherName },
     });
   });
 
@@ -332,9 +399,20 @@ export async function updateClass(classGroupId, patch = {}) {
   if (patch.stream !== undefined) clean.stream = String(patch.stream ?? '').trim() || null;
   if (patch.name !== undefined) clean.name = String(patch.name ?? '').trim() || classLabel({ ...cls, ...clean });
   if (patch.academicYear !== undefined) clean.academicYear = patch.academicYear;
+  if (patch.teacherName !== undefined) clean.teacherName = patch.teacherName || null;
   if (typeof patch.active === 'boolean') clean.active = patch.active;
 
-  if (Object.keys(clean).length > 0) await db.classGroups.update(cls.id, clean);
+  if (Object.keys(clean).length > 0) {
+    await db.transaction('rw', db.classGroups, db.rosterSyncQueue, async () => {
+      await db.classGroups.update(cls.id, clean);
+      // 'name' and 'active' are client-only concepts (the server's class_groups
+      // has no such columns) - only push the fields it actually stores.
+      const { grade, stream, academicYear, teacherName } = clean;
+      if (grade !== undefined || stream !== undefined || academicYear !== undefined || teacherName !== undefined) {
+        await queueRosterPush({ method: 'PATCH', path: `/api/roster/classes/${classGroupId}`, body: { grade, stream, academicYear, teacherName } });
+      }
+    });
+  }
   return { ...cls, ...clean };
 }
 
@@ -424,7 +502,7 @@ export async function generateCardUid() {
  * straight away (pass `cardUid` only to import an existing one). The generated
  * `studentId` uses a `stu-` prefix to match the seeded IDs.
  */
-export async function addStudent({ classGroupId, fullName, admissionNo, cardUid }) {
+export async function addStudent({ classGroupId, fullName, admissionNo, cardUid, guardianPhone, guardianEmail }) {
   if (!classGroupId) throw new Error('classGroupId is required');
   const name = String(fullName ?? '').trim();
   if (!name) throw new Error('Student name is required');
@@ -444,18 +522,28 @@ export async function addStudent({ classGroupId, fullName, admissionNo, cardUid 
     classGroupId,
     fullName: name,
     admissionNo: String(admissionNo ?? '').trim() || null,
+    guardianPhone: String(guardianPhone ?? '').trim() || null,
+    guardianEmail: String(guardianEmail ?? '').trim() || null,
     cardUid: uid,
     cardIssuedAt: now,
     enrolledAt: todayISO(),
     active: true,
   };
 
-  await db.transaction('rw', db.students, db.auditLog, async () => {
+  await db.transaction('rw', db.students, db.auditLog, db.rosterSyncQueue, async () => {
     await db.students.add(record);
     await db.auditLog.add({
       action: 'student.enrolled', actorId: null, recordId: studentId, timestamp: now,
       detail: JSON.stringify({ fullName: name, classGroupId, cardUid: uid }),
     });
+    await queueRosterPush({
+      path: '/api/roster/students',
+      body: {
+        studentId, classGroupId, fullName: name, admissionNo: record.admissionNo,
+        guardianPhone: record.guardianPhone, guardianEmail: record.guardianEmail, enrolledAt: record.enrolledAt,
+      },
+    });
+    await queueRosterPush({ path: `/api/roster/students/${studentId}/card`, body: { cardUid: uid } });
   });
 
   return record;
@@ -471,12 +559,13 @@ export async function issueCard(studentId) {
 
   const uid = await generateCardUid();
   const now = new Date().toISOString();
-  await db.transaction('rw', db.students, db.auditLog, async () => {
+  await db.transaction('rw', db.students, db.auditLog, db.rosterSyncQueue, async () => {
     await db.students.update(student.id, { cardUid: uid, cardIssuedAt: now });
     await db.auditLog.add({
       action: 'student.card_issued', actorId: null, recordId: studentId, timestamp: now,
       detail: JSON.stringify({ cardUid: uid, replaces: student.cardUid ?? null }),
     });
+    await queueRosterPush({ path: `/api/roster/students/${studentId}/card`, body: { cardUid: uid } });
   });
   return { ...student, cardUid: uid, cardIssuedAt: now };
 }
@@ -497,13 +586,15 @@ export async function setStudentCard(studentId, cardUid) {
     }
   }
 
-  await db.transaction('rw', db.students, db.auditLog, async () => {
+  await db.transaction('rw', db.students, db.auditLog, db.rosterSyncQueue, async () => {
     await db.students.update(student.id, { cardUid: uid, cardIssuedAt: uid ? new Date().toISOString() : null });
     await db.auditLog.add({
       action: uid ? 'student.card_assigned' : 'student.card_cleared',
       actorId: null, recordId: studentId, timestamp: new Date().toISOString(),
       detail: JSON.stringify({ cardUid: uid }),
     });
+    // No "clear a card" endpoint server-side yet - only push a real assignment.
+    if (uid) await queueRosterPush({ path: `/api/roster/students/${studentId}/card`, body: { cardUid: uid } });
   });
 
   return { ...student, cardUid: uid };
@@ -523,9 +614,20 @@ export async function updateStudent(studentId, patch = {}) {
   if (patch.admissionNo !== undefined) {
     clean.admissionNo = String(patch.admissionNo ?? '').trim() || null;
   }
+  if (patch.guardianPhone !== undefined) {
+    clean.guardianPhone = String(patch.guardianPhone ?? '').trim() || null;
+  }
+  if (patch.guardianEmail !== undefined) {
+    clean.guardianEmail = String(patch.guardianEmail ?? '').trim() || null;
+  }
   if (typeof patch.active === 'boolean') clean.active = patch.active;
 
-  if (Object.keys(clean).length > 0) await db.students.update(student.id, clean);
+  if (Object.keys(clean).length > 0) {
+    await db.transaction('rw', db.students, db.rosterSyncQueue, async () => {
+      await db.students.update(student.id, clean);
+      await queueRosterPush({ method: 'PATCH', path: `/api/roster/students/${studentId}`, body: clean });
+    });
+  }
   return { ...student, ...clean };
 }
 
@@ -545,7 +647,7 @@ export async function removeStudent(studentId) {
   const soft = historyCount > 0;
   const now = new Date().toISOString();
 
-  await db.transaction('rw', db.students, db.auditLog, async () => {
+  await db.transaction('rw', db.students, db.auditLog, db.rosterSyncQueue, async () => {
     if (soft) await db.students.update(student.id, { active: false, removedAt: now });
     else await db.students.delete(student.id);
     await db.auditLog.add({
@@ -553,6 +655,9 @@ export async function removeStudent(studentId) {
       actorId: null, recordId: studentId, timestamp: now,
       detail: JSON.stringify({ fullName: student.fullName, historyCount }),
     });
+    // Deactivate server-side either way - harmless no-op if the row was never
+    // pushed (e.g. it was created and removed again before reconnecting).
+    await queueRosterPush({ method: 'PATCH', path: `/api/roster/students/${studentId}`, body: { active: false } });
   });
 
   return { removed: true, softDeleted: soft };
@@ -600,4 +705,85 @@ export async function getClassHistory(classGroupId, sinceISO) {
   return rows
     .filter((r) => ids.has(r.studentId))
     .sort((a, b) => a.date.localeCompare(b.date));
+}
+
+/** Roster writes not yet confirmed by the server - mirrors countPendingSync(). */
+export async function countPendingRosterSync() {
+  return db.rosterSyncQueue.where('status').anyOf('pending', 'failed').count();
+}
+
+// --------------------------------------------------------------------------- //
+// Follow-ups                                                                  //
+//                                                                             //
+// One row per time a teacher/admin reaches out about a flagged student. There //
+// is no "resolved" ticket state (see server/src/db/schema.sql's follow_ups    //
+// comment) - a fresh flag after a gap just gets a fresh row. Mirrored to the  //
+// server via rosterSyncQueue so an admin's cross-class view and the teacher's //
+// own device agree on who has been contacted.                                //
+// --------------------------------------------------------------------------- //
+
+const FOLLOW_UP_METHODS = ['parent_call', 'sms', 'home_visit', 'meeting', 'other'];
+
+/** Log a follow-up for a flagged student. `flag` is the risk flag at the time ('amber'|'red'). */
+export async function addFollowUp({ studentId, flag, method, note, actorId }) {
+  if (!studentId) throw new Error('studentId is required');
+  if (!['amber', 'red'].includes(flag)) throw new Error(`flag must be amber or red (got "${flag}")`);
+  if (!FOLLOW_UP_METHODS.includes(method)) throw new Error(`method must be one of ${FOLLOW_UP_METHODS.join(', ')}`);
+
+  const now = new Date().toISOString();
+  const record = {
+    followUpId: `fu-${newId()}`,
+    studentId,
+    flag,
+    method,
+    note: String(note ?? '').trim() || null,
+    actorId: actorId ?? null,
+    createdAt: now,
+  };
+
+  await db.transaction('rw', db.followUps, db.auditLog, db.rosterSyncQueue, async () => {
+    await db.followUps.add(record);
+    await db.auditLog.add({
+      action: 'followup.logged', actorId: actorId ?? null, recordId: studentId, timestamp: now,
+      detail: JSON.stringify({ flag, method }),
+    });
+    await queueRosterPush({
+      path: `/api/admin/students/${studentId}/follow-ups`,
+      body: { flag, method, note: record.note, actor: actorId ?? null },
+    });
+  });
+
+  return record;
+}
+
+/** A student's follow-up log, newest first. */
+export async function getFollowUpsForStudent(studentId) {
+  const rows = await db.followUps.where('studentId').equals(studentId).toArray();
+  return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+}
+
+export const FOLLOW_UP_FRESH_DAYS = 14;
+
+/**
+ * For a set of (typically flagged) students: when each was last followed up,
+ * and which have gone `freshDays` or more without one (or never had one at
+ * all). Drives the "needs follow-up" badge on Alerts cards and the follow-up
+ * pill on the profile.
+ * @returns {Promise<{lastAt: Map<string,string>, needsFollowUp: Set<string>}>}
+ */
+export async function getFollowUpSummary(studentIds, freshDays = FOLLOW_UP_FRESH_DAYS) {
+  if (studentIds.length === 0) return { lastAt: new Map(), needsFollowUp: new Set() };
+  const cutoff = new Date(Date.now() - freshDays * 86_400_000).toISOString();
+  const rows = await db.followUps.where('studentId').anyOf(studentIds).toArray();
+  const lastAt = new Map();
+  for (const r of rows) {
+    const prev = lastAt.get(r.studentId);
+    if (!prev || r.createdAt > prev) lastAt.set(r.studentId, r.createdAt);
+  }
+  const needsFollowUp = new Set();
+  for (const id of studentIds) {
+    const last = lastAt.get(id);
+    if (!last || last < cutoff) needsFollowUp.add(id);
+  }
+  return { lastAt, needsFollowUp };
 }

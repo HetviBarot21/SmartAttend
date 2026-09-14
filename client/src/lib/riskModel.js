@@ -272,7 +272,7 @@ export function riskInsights(history, features, risk, asOf = toISO(new Date())) 
     const dom = dominantAbsenceDay(history, asOf);
     out.push(
       dom && dom.count >= 2 && features.dow_concentration >= 0.4
-        ? `Missed ${streak} consecutive school days, clustered on ${dom.day}s — a recurring weekly disruption pattern.`
+        ? `Missed ${streak} consecutive school days, clustered on ${dom.day}s.`
         : `Missed ${streak} consecutive school days in the last four weeks.`
     );
   }
@@ -288,13 +288,11 @@ export function riskInsights(history, features, risk, asOf = toISO(new Date())) 
   }
 
   if (features.absence_episode_count >= 3) {
-    out.push(`${features.absence_episode_count} separate absence episodes this month — attendance is fragmenting, not just one bad week.`);
+    out.push(`${features.absence_episode_count} separate absence episodes this month, not just one bad week.`);
   }
 
-  if (risk.flag === 'red') {
-    out.push(
-      `~${Math.round(risk.dropoutProbability * 100)}% modelled likelihood of chronic absenteeism without intervention.`
-    );
+  if (risk.flag === 'red' && out.length === 0) {
+    out.push('This pattern points to a high risk of continued absence without a check-in.');
   }
 
   if (out.length === 0) out.push('Attendance is within the normal range this month.');

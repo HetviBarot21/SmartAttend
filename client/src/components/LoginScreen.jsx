@@ -23,6 +23,8 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [confirm, setConfirm] = useState('');
   const [code, setCode] = useState('');
+  const [role, setRole] = useState('teacher');
+  const [schoolName, setSchoolName] = useState('');
   const [reveal, setReveal] = useState(false);
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
@@ -61,7 +63,7 @@ export default function LoginScreen() {
     }
     setBusy(true);
     try {
-      const result = await signUp({ name, email, password });
+      const result = await signUp({ name, email, password, role, schoolName: schoolName.trim() || null });
       if (result?.needsConfirmation) {
         switchView('confirm');
         setNotice(`We emailed a verification code to ${email.trim()}.`);
@@ -181,14 +183,12 @@ export default function LoginScreen() {
             onClick={() => setPinHint(true)}
           >
             <KeypadIcon size={18} />
-            Offline Mode — Use PIN
+            Use PIN offline
           </button>
 
           {pinHint && (
             <p className="devnote" role="status">
-              Your PIN unlocks SmartAttend automatically once a signed-in session has expired offline.
-              On a device that has been signed out completely, sign in online once — after that you can
-              keep working with just your PIN.
+              Unlocks SmartAttend automatically once a session expires offline. Sign in online once first.
             </p>
           )}
 
@@ -216,6 +216,50 @@ export default function LoginScreen() {
           )}
           {error && <div className="notice notice--err" role="alert">{error}</div>}
           {notice && <div className="notice notice--info" role="status">{notice}</div>}
+
+          <div className="field">
+            <span className="field__label">I am a…</span>
+            <div className="role-picker" role="radiogroup" aria-label="Account role">
+              <button
+                type="button"
+                className={`role-picker__opt${role === 'teacher' ? ' role-picker__opt--active' : ''}`}
+                role="radio"
+                aria-checked={role === 'teacher'}
+                onClick={() => setRole('teacher')}
+                disabled={busy || blocked}
+              >
+                <strong>Teacher</strong>
+                <span>Take attendance for my own class(es)</span>
+              </button>
+              <button
+                type="button"
+                className={`role-picker__opt${role === 'admin' ? ' role-picker__opt--active' : ''}`}
+                role="radio"
+                aria-checked={role === 'admin'}
+                onClick={() => setRole('admin')}
+                disabled={busy || blocked}
+              >
+                <strong>School admin</strong>
+                <span>See attendance across every class</span>
+              </button>
+            </div>
+          </div>
+
+          {role === 'admin' && (
+            <div className="field">
+              <label className="field__label" htmlFor="su-school">School name <span style={{ fontWeight: 400 }}>(optional)</span></label>
+              <input
+                id="su-school"
+                className="field__input"
+                type="text"
+                autoComplete="organization"
+                placeholder="e.g. Kibera Secondary School"
+                value={schoolName}
+                onChange={(e) => setSchoolName(e.target.value)}
+                disabled={busy || blocked}
+              />
+            </div>
+          )}
 
           <div className="field">
             <label className="field__label" htmlFor="su-name">Full name</label>
@@ -307,9 +351,7 @@ export default function LoginScreen() {
 
           {!cognitoConfigured && (
             <p className="devnote">
-              <strong>Local authentication mode.</strong> Your name is saved on this device
-              and you’re signed in straight away — no email verification until a Cognito
-              user pool is configured.
+              <strong>Local authentication mode.</strong> Saved on this device, no email verification.
             </p>
           )}
         </form>

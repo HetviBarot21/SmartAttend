@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
-import { getStudentsByClass, getClassHistory } from '../db/database';
+import { getStudentsByClass, getClassHistory, getFollowUpSummary } from '../db/database';
 import {
   computeFeatures,
   scoreRisk,
@@ -9,7 +9,7 @@ import {
   toISO,
 } from '../lib/riskModel';
 import Avatar from './Avatar';
-import { AlertTriangleIcon, ArrowRightIcon } from './icons';
+import { AlertTriangleIcon, ArrowRightIcon, PhoneIcon, MailIcon } from './icons';
 
 const HISTORY_DAYS = 63; // 9 weeks — enough for the 6-week trend + 4-week windows
 
@@ -19,10 +19,18 @@ function daysAgoISO(n) {
   return toISO(dt);
 }
 
+function fmtDaysAgo(iso) {
+  const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
+  if (days <= 0) return 'today';
+  if (days === 1) return '1 day ago';
+  return `${days} days ago`;
+}
+
 export default function Alerts({ classGroupId, className, onOpenProfile }) {
   const [students, setStudents] = useState([]);
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [followUp, setFollowUp] = useState({ lastAt: new Map(), needsFollowUp: new Set() });
 
   useEffect(() => {
     let cancelled = false;
@@ -58,6 +66,14 @@ export default function Alerts({ classGroupId, className, onOpenProfile }) {
       .sort((a, b) => b.risk.score - a.risk.score);
   }, [students, history]);
 
+  useEffect(() => {
+    let cancelled = false;
+    getFollowUpSummary(flagged.map((f) => f.student.studentId)).then((summary) => {
+      if (!cancelled) setFollowUp(summary);
+    });
+    return () => { cancelled = true; };
+  }, [flagged]);
+
   if (loading) return <p className="empty">Assessing attendance risk…</p>;
 
   return (
@@ -71,10 +87,7 @@ export default function Alerts({ classGroupId, className, onOpenProfile }) {
       </div>
 
       {flagged.length === 0 ? (
-        <p className="empty">
-          No students are flagged for attendance risk this month.
-          <br />Every student is at or above the follow-up threshold.
-        </p>
+        <p className="empty">No students flagged this month.</p>
       ) : (
         flagged.map(({ student, features, risk, rows }) => {
           const headline = riskHeadline(risk);
@@ -94,9 +107,27 @@ export default function Alerts({ classGroupId, className, onOpenProfile }) {
 
               <p className="alert-card__body">{insight}</p>
 
+              {(student.guardianPhone || student.guardianEmail) && (
+                <div className="alert-card__contact">
+                  {student.guardianPhone && (
+                    <a href={`tel:${student.guardianPhone}`}><PhoneIcon size={14} /> {student.guardianPhone}</a>
+                  )}
+                  {student.guardianEmail && (
+                    <a href={`mailto:${student.guardianEmail}`}><MailIcon size={14} /> {student.guardianEmail}</a>
+                  )}
+                </div>
+              )}
+
               <div className="alert-card__foot">
                 <span className="alert-card__risk">
                   {headline.label}: <b>{headline.pct}%</b>
+                  {followUp.lastAt.has(student.studentId) ? (
+                    <span className="followup-badge followup-badge--done">
+                      · followed up {fmtDaysAgo(followUp.lastAt.get(student.studentId))}
+                    </span>
+                  ) : (
+                    <span className="followup-badge followup-badge--needed"> · not yet followed up</span>
+                  )}
                 </span>
                 <button
                   type="button"
@@ -113,7 +144,7 @@ export default function Alerts({ classGroupId, className, onOpenProfile }) {
       )}
 
       <p className="card__hint" style={{ textAlign: 'center', marginTop: 16 }}>
-        Flags use the rule-based scorer from the ML pipeline. The trained model refines these once cloud sync is live.
+        Flags use the ML risk model.
       </p>
     </>
   );

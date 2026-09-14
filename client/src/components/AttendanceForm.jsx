@@ -150,7 +150,7 @@ export default function AttendanceForm({ classGroupId, pending = 0, onRecordsCha
       )}
       {allMarked && !result && (
         <div className="notice notice--ok" role="status">
-          Everyone is marked for today. Tap a status to correct it — attendance stays editable all day.
+          Everyone is marked. Tap a status to correct it anytime today.
         </div>
       )}
 

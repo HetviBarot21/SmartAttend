@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { getClasses, getStudentsByClass, classLabel } from '../db/database';
+import { useAuth } from '../auth/AuthContext';
 import CreateClassForm from './CreateClassForm';
 
 /**
@@ -7,18 +8,19 @@ import CreateClassForm from './CreateClassForm';
  * new one, or jump to the roster editor for the current class.
  */
 export default function ClassSwitcher({ activeClassId, onPick, onManageRoster, onClose }) {
+  const { user } = useAuth();
   const [classes, setClasses] = useState([]);
   const [counts, setCounts] = useState({});
   const [creating, setCreating] = useState(false);
 
   const load = useCallback(async () => {
-    const list = await getClasses();
+    const list = await getClasses({ ownerUsername: user?.username });
     setClasses(list);
     const entries = await Promise.all(
       list.map(async (c) => [c.classGroupId, (await getStudentsByClass(c.classGroupId)).length]),
     );
     setCounts(Object.fromEntries(entries));
-  }, []);
+  }, [user?.username]);
 
   useEffect(() => { load(); }, [load]);
 

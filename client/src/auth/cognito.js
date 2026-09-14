@@ -4,7 +4,7 @@ import {
   CognitoUserAttribute,
   AuthenticationDetails
 } from 'amazon-cognito-identity-js';
-import { db } from '../db/database';
+import { db, LOCAL_SCHOOL_ID } from '../db/database';
 
 /**
  * Amazon Cognito authentication with a local fallback.
@@ -73,13 +73,21 @@ function sessionFromCognito(cognitoSession, username) {
   };
 }
 
-function localSession(username, displayName, now = Date.now()) {
+/** @param {'teacher'|'admin'} role */
+function localSession(username, displayName, role = 'teacher', schoolName = null, now = Date.now()) {
   return {
     key: SESSION_KEY,
     mode: 'local',
     username,
     displayName: displayName || username,
-    roles: ['teacher'],
+    roles: [role],
+    role,
+    // Local mode is single-school (no server-side identity system - see
+    // PROJECT_CONTEXT.md). Every device shares LOCAL_SCHOOL_ID so an admin's
+    // cross-class reports and a teacher's roster pushes land in the same
+    // school row server-side.
+    schoolId: LOCAL_SCHOOL_ID,
+    schoolName: schoolName || null,
     idToken: null,
     refreshToken: null,
     expiresAt: now + LOCAL_TOKEN_TTL_MS,
@@ -90,17 +98,20 @@ function localSession(username, displayName, now = Date.now()) {
 /**
  * Local-mode account profiles. Before the Cognito pool exists (Sprint 2) there
  * is no server to hold a teacher's name, so "sign up" just records a display
- * name on the device, keyed by email, in the same IndexedDB table the session
- * lives in. It is not a credential store - local mode still accepts any
- * password - it only lets the app greet the teacher by name after sign-up.
+ * name, role and (for admins) school name on the device, keyed by email, in
+ * the same IndexedDB table the session lives in. It is not a credential store
+ * - local mode still accepts any password - it only lets the app greet the
+ * teacher by name and restore their role on the next sign-in.
  */
 const accountKey = (email) => `account:${String(email).trim().toLowerCase()}`;
 
-async function saveLocalAccount(email, displayName) {
+async function saveLocalAccount(email, displayName, role = 'teacher', schoolName = null) {
   await db.authState.put({
     key: accountKey(email),
     email: String(email).trim().toLowerCase(),
     displayName,
+    role,
+    schoolName,
     createdAt: new Date().toISOString()
   });
 }
@@ -130,7 +141,7 @@ export async function signIn(username, password) {
   const pool = userPool();
   if (!pool) {
     const account = await loadLocalAccount(username);
-    return persist(localSession(username, account?.displayName));
+    return persist(localSession(username, account?.displayName, account?.role, account?.schoolName));
   }
 
   if (typeof navigator !== 'undefined' && navigator.onLine === false) {
@@ -166,9 +177,10 @@ export async function signIn(username, password) {
  * Returns `{ needsConfirmation: true, username }`; the caller then collects the
  * code and calls confirmSignUp() before the account can sign in.
  *
+ * @param {'teacher'|'admin'} [role] local mode only - Cognito mode derives role from `cognito:groups`
  * @throws {AuthError} INVALID_INPUT | NETWORK | SIGNUP_FAILED
  */
-export async function signUp({ name, email, password }) {
+export async function signUp({ name, email, password, role = 'teacher', schoolName = null }) {
   const displayName = name?.trim();
   const username = email?.trim();
 
@@ -181,8 +193,8 @@ export async function signUp({ name, email, password }) {
 
   const pool = userPool();
   if (!pool) {
-    await saveLocalAccount(username, displayName);
-    const session = await persist(localSession(username, displayName));
+    await saveLocalAccount(username, displayName, role, schoolName);
+    const session = await persist(localSession(username, displayName, role, schoolName));
     return { needsConfirmation: false, session };
   }
 

@@ -34,7 +34,7 @@ export default function AccountSheet({
         <div className="sheet__grip" />
         <div className="sheet__name">{user?.displayName ?? user?.username ?? 'Teacher'}</div>
         <div className="sheet__sub">
-          {online ? 'Online' : 'Offline — attendance is saving to this device'}
+          {online ? 'Online' : 'Offline, saving to this device'}
           {pinSession ? ' · PIN session' : ''}
         </div>
 
@@ -54,7 +54,7 @@ export default function AccountSheet({
 
         {onManagePin && (
           <div className="sheet__row">
-            <span>Offline PIN{pinEnrolled ? '' : ' — not set'}</span>
+            <span>Offline PIN{pinEnrolled ? '' : ' (not set)'}</span>
             <button type="button" className="linkbtn" onClick={onManagePin}>
               {pinEnrolled ? 'Change' : 'Set up'}
             </button>

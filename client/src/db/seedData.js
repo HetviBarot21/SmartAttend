@@ -1,4 +1,4 @@
-import { db } from './database';
+import { db, getStudentsByClass, newId } from './database';
 
 export const DEMO_CLASS_ID = 'class-form3b-001';
 
@@ -187,4 +187,83 @@ export async function seedDemoHistory(today = new Date()) {
 
   await db.attendanceEvents.bulkAdd(rows);
   return { seeded: true, count: rows.length };
+}
+
+// --------------------------------------------------------------------------- //
+// Sample history for a REAL class                                             //
+//                                                                             //
+// seedDemoHistory() above only ever touches the fixed Form 3 B demo roster.   //
+// This is the same generator made to work on any class's real students - the //
+// "Generate sample month" action in RosterManager, for demoing the risk model //
+// (lib/riskModel.js) and the admin dashboard against an admin's own roster    //
+// rather than the canned demo one. Unlike seedDemoHistory, generated events   //
+// ARE queued for sync (syncedAt: null + a syncQueue row) - the whole point of //
+// this button is to show up in both the teacher's own screens AND the admin  //
+// overview, which reads from the server.                                     //
+// --------------------------------------------------------------------------- //
+
+// Weighted so most students stay green, but every class gets a believable
+// handful of amber/red cases to demonstrate the risk model.
+const SAMPLE_PROFILE_POOL = ['steady', 'steady', 'steady', 'latecomer', 'wobbling', 'declining'];
+function profileForStudent(studentId) {
+  return SAMPLE_PROFILE_POOL[hashStr(studentId) % SAMPLE_PROFILE_POOL.length];
+}
+
+/**
+ * Generate `weeks` weeks of plausible attendance history for every active
+ * student in a class. Refuses to run if the class already has any attendance
+ * history, local or otherwise - this is a bootstrapping aid for a brand-new
+ * class, not a way to backfill or overwrite real records.
+ *
+ * @returns {Promise<{seeded: boolean, reason?: string, count?: number, studentCount?: number}>}
+ */
+export async function generateSampleHistory(classGroupId, { weeks = 4, today = new Date() } = {}) {
+  const students = await getStudentsByClass(classGroupId);
+  if (students.length === 0) return { seeded: false, reason: 'This class has no students to generate history for yet.' };
+
+  const studentIds = students.map((s) => s.studentId);
+  const existing = await db.attendanceEvents.where('studentId').anyOf(studentIds).count();
+  if (existing > 0) return { seeded: false, reason: 'This class already has attendance history.' };
+
+  const todayIso = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+  const g = today.getDay();
+  const monday = isoAddDays(todayIso, -(g === 0 ? 6 : g - 1) - weeks * 7);
+
+  const schoolDays = [];
+  for (let day = 0; day < (weeks + 1) * 7; day += 1) {
+    const date = isoAddDays(monday, day);
+    if (date >= todayIso) break;
+    const [yy, mm, dd] = date.split('-').map(Number);
+    const dow = new Date(yy, mm - 1, dd).getDay();
+    if (dow >= 1 && dow <= 5) schoolDays.push(date);
+  }
+
+  const now = new Date().toISOString();
+  const total = schoolDays.length;
+  const eventRows = [];
+  const queueRows = [];
+
+  for (const student of students) {
+    const profile = HISTORY_PROFILES[profileForStudent(student.studentId)];
+    schoolDays.forEach((date, idx) => {
+      const rand = mulberry32(hashStr(`${student.studentId}:${date}`))();
+      const status = profile({ rand, fromEnd: total - idx });
+      // Must be a real UUID - server/src/schemas/attendanceSync.schema.js
+      // rejects the whole sync batch otherwise (these rows ARE synced, unlike
+      // seedDemoHistory's, so they have to satisfy the same schema real ones do).
+      const eventId = newId();
+      eventRows.push({
+        eventId, studentId: student.studentId, date, status,
+        captureMethod: 'import', recordedBy: null, syncedAt: null, createdAt: now,
+      });
+      queueRows.push({ eventId, status: 'pending', createdAt: now, attemptCount: 0 });
+    });
+  }
+
+  await db.transaction('rw', db.attendanceEvents, db.syncQueue, async () => {
+    await db.attendanceEvents.bulkAdd(eventRows);
+    await db.syncQueue.bulkAdd(queueRows);
+  });
+
+  return { seeded: true, count: eventRows.length, studentCount: students.length };
 }

@@ -6,28 +6,28 @@ import {
   removeStudent,
   issueCard,
 } from '../db/database';
+import { generateSampleHistory } from '../db/seedData';
+import { requestBackgroundSync } from '../services/syncService';
 import Avatar from './Avatar';
 import TopBar from './TopBar';
 import CardList from './CardList';
 
-/**
- * Class roster editor - enrol / remove students and reissue lost RFID cards.
- * Every enrolled student is issued a card number automatically; "Print cards"
- * opens a printable list to encode onto the physical cards.
- * Reached from the account sheet or the class switcher. Changes are local to
- * this device (no Tier 2 student-sync endpoint yet - see PROJECT_CONTEXT).
- */
+/** Class roster editor - enrol / remove students, reissue lost RFID cards. */
 export default function RosterManager({ classGroupId, className, onClose }) {
   const [active, setActive] = useState([]);
   const [removed, setRemoved] = useState([]);
   const [loading, setLoading] = useState(true);
   const [name, setName] = useState('');
   const [admissionNo, setAdmissionNo] = useState('');
+  const [guardianPhone, setGuardianPhone] = useState('');
+  const [guardianEmail, setGuardianEmail] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
   const [confirmId, setConfirmId] = useState(null);
   const [reissueId, setReissueId] = useState(null);
   const [printing, setPrinting] = useState(false);
+  const [sampleNotice, setSampleNotice] = useState(null);
+  const [generating, setGenerating] = useState(false);
 
   const load = useCallback(async () => {
     const all = await getStudentsByClass(classGroupId, { includeInactive: true });
@@ -43,9 +43,11 @@ export default function RosterManager({ classGroupId, className, onClose }) {
     setError(null);
     setBusy(true);
     try {
-      await addStudent({ classGroupId, fullName: name, admissionNo });
+      await addStudent({ classGroupId, fullName: name, admissionNo, guardianPhone, guardianEmail });
       setName('');
       setAdmissionNo('');
+      setGuardianPhone('');
+      setGuardianEmail('');
       await load();
     } catch (err) {
       setError(err.message ?? 'Could not enrol the student');
@@ -83,6 +85,24 @@ export default function RosterManager({ classGroupId, className, onClose }) {
       await load();
     } finally {
       setBusy(false);
+    }
+  }
+
+  async function handleGenerateSample() {
+    setGenerating(true);
+    setSampleNotice(null);
+    try {
+      const result = await generateSampleHistory(classGroupId);
+      if (result.seeded) {
+        setSampleNotice(`Generated ${result.count} records for ${result.studentCount} student(s). Check Heatmap and Alerts.`);
+        requestBackgroundSync().catch(() => {});
+      } else {
+        setSampleNotice(result.reason);
+      }
+    } catch (err) {
+      setSampleNotice(err.message ?? 'Could not generate sample attendance');
+    } finally {
+      setGenerating(false);
     }
   }
 
@@ -125,16 +145,41 @@ export default function RosterManager({ classGroupId, className, onClose }) {
             />
           </div>
 
+          <div className="field-row">
+            <div className="field">
+              <label className="field__label" htmlFor="rm-phone">Guardian phone <span style={{ fontWeight: 400 }}>(optional)</span></label>
+              <input
+                id="rm-phone" className="field__input" type="tel" autoComplete="off"
+                placeholder="+254 7..." value={guardianPhone}
+                onChange={(e) => setGuardianPhone(e.target.value)} disabled={busy}
+              />
+            </div>
+            <div className="field">
+              <label className="field__label" htmlFor="rm-email">Guardian email <span style={{ fontWeight: 400 }}>(optional)</span></label>
+              <input
+                id="rm-email" className="field__input" type="email" autoComplete="off"
+                placeholder="parent@example.com" value={guardianEmail}
+                onChange={(e) => setGuardianEmail(e.target.value)} disabled={busy}
+              />
+            </div>
+          </div>
+
           <button className="btn" type="submit" disabled={busy || name.trim() === ''}>
             {busy ? 'Working…' : 'Enrol student'}
           </button>
         </form>
 
         {active.length > 0 && (
-          <button type="button" className="btn btn--secondary" onClick={() => setPrinting(true)}>
-            Print card list ({active.length})
-          </button>
+          <div className="roster-actions">
+            <button type="button" className="btn btn--secondary" onClick={() => setPrinting(true)}>
+              Print card list ({active.length})
+            </button>
+            <button type="button" className="btn btn--secondary" onClick={handleGenerateSample} disabled={generating}>
+              {generating ? 'Generating…' : 'Generate sample month'}
+            </button>
+          </div>
         )}
+        {sampleNotice && <div className="notice notice--info" role="status">{sampleNotice}</div>}
 
         {loading ? (
           <p className="empty">Loading roster…</p>

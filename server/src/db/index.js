@@ -24,7 +24,29 @@ export function openDatabase(path = config.dbPath) {
   db.pragma('foreign_keys = ON');    // not on by default in SQLite
 
   db.exec(readFileSync(SCHEMA_PATH, 'utf8'));
+  migrate(db);
   return db;
+}
+
+/**
+ * Column additions to tables that already existed before this column was
+ * introduced. `CREATE TABLE IF NOT EXISTS` (above) is a no-op against an
+ * existing table, so a new column needs an explicit, idempotent ALTER here -
+ * this runs on every boot and is a no-op once the column is present.
+ */
+function migrate(db) {
+  const hasColumn = (table, column) =>
+    db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`).get(table, column) != null;
+
+  if (!hasColumn('class_groups', 'teacher_name')) {
+    db.exec(`ALTER TABLE class_groups ADD COLUMN teacher_name TEXT`);
+  }
+  if (!hasColumn('students', 'guardian_phone')) {
+    db.exec(`ALTER TABLE students ADD COLUMN guardian_phone TEXT`);
+  }
+  if (!hasColumn('students', 'guardian_email')) {
+    db.exec(`ALTER TABLE students ADD COLUMN guardian_email TEXT`);
+  }
 }
 
 let singleton = null;

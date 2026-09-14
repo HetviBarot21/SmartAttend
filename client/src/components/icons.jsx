@@ -138,6 +138,21 @@ export const CheckCircleIcon = (p) => (
   </Svg>
 );
 
+export const PhoneIcon = (p) => (
+  <Svg {...p}>
+    <path d="M4 4h4l2 5-2.5 1.5a11 11 0 0 0 5 5L14 13l5 2v4a2 2 0 0 1-2 2A16 16 0 0 1 2 6a2 2 0 0 1 2-2Z" />
+  </Svg>
+);
+
+export const ChartIcon = (p) => (
+  <Svg {...p}>
+    <path d="M4 20V10" />
+    <path d="M11 20V4" />
+    <path d="M18 20v-7" />
+    <path d="M3 20h18" />
+  </Svg>
+);
+
 export const CapIcon = (p) => (
   <Svg {...p}>
     <path d="m3 9 9-4 9 4-9 4-9-4Z" />
