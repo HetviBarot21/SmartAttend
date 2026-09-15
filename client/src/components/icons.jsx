@@ -144,6 +144,14 @@ export const PhoneIcon = (p) => (
   </Svg>
 );
 
+export const LogOutIcon = (p) => (
+  <Svg {...p}>
+    <path d="M15 4h3a2 2 0 0 1 2 2v12a2 2 0 0 1-2 2h-3" />
+    <path d="M10 17l5-5-5-5" />
+    <path d="M15 12H3" />
+  </Svg>
+);
+
 export const ChartIcon = (p) => (
   <Svg {...p}>
     <path d="M4 20V10" />

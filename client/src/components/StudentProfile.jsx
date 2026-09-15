@@ -11,7 +11,7 @@ import {
 import Avatar from './Avatar';
 import TopBar from './TopBar';
 import FollowUpPanel from './FollowUpPanel';
-import { AlertTriangleIcon, ChevronDownIcon } from './icons';
+import { ChevronDownIcon } from './icons';
 
 const RISK_LABEL = { red: 'HIGH RISK', amber: 'AT RISK', green: 'ON TRACK' };
 const RISK_TAKEAWAY = {
@@ -127,49 +127,62 @@ export default function StudentProfile({ studentId, className, onBack }) {
   const recent = [...history].reverse();
   const shown = showAll ? recent : recent.slice(0, INITIAL_HISTORY);
 
+  const heroVariant = assessable ? risk.flag : 'new';
+
   return (
     <ProfilePage title={student.fullName} onBack={onBack}>
-      <div className="card">
-        <div className="profile-hero">
-          <Avatar name={student.fullName} size="lg" />
-          <div className="profile-hero__id">
-            <div className="profile-hero__name">{student.fullName}</div>
-            <div className="profile-hero__meta">
-              Class: {className}
-              <br />Admission no: {student.admissionNo || '—'}
-              <br />RFID card: {student.cardUid || 'not issued'}
-              <br />Enrolled: {enrolled}
+      <div className={`profile-hero-card profile-hero-card--${heroVariant}`}>
+        <div className="profile-hero-card__top">
+          <Avatar name={student.fullName} size="lg" className="avatar--on-hero" />
+          <div className="profile-hero-card__id">
+            <div className="profile-hero-card__name">{student.fullName}</div>
+            <div className="profile-hero-card__meta">{className} · Adm {student.admissionNo || '—'}</div>
+            <div className="profile-hero-card__meta profile-hero-card__meta--sub">
+              {student.cardUid ? `Card ${student.cardUid}` : 'No card issued'} · Since {enrolled}
             </div>
           </div>
-          {assessable ? (
-            <span className={`pill pill--risk-${risk.flag === 'red' ? 'red' : 'amber'}`}>
-              {RISK_LABEL[risk.flag]}
-            </span>
-          ) : (
-            <span className="pill pill--unmarked">NEW</span>
-          )}
+          <span className="pill pill--on-hero">{assessable ? RISK_LABEL[risk.flag] : 'NEW'}</span>
         </div>
 
-        {assessable && risk.flag !== 'green' && (
-          <div className={`followup-badge followup-badge--${followUp.lastAt.has(studentId) ? 'done' : 'needed'}`} style={{ marginTop: 10 }}>
-            {followUp.lastAt.has(studentId)
-              ? `Followed up ${new Date(followUp.lastAt.get(studentId)).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`
-              : 'Not yet followed up'}
-          </div>
-        )}
-
         {assessable ? (
-          <div className={`dropout dropout--${risk.flag}`}>
-            <div className="dropout__value">{Math.round(risk.dropoutProbability * 100)}%</div>
-            <div className="dropout__label">risk of continued absence</div>
-            {RISK_TAKEAWAY[risk.flag] && <div className="dropout__takeaway">{RISK_TAKEAWAY[risk.flag]}</div>}
-          </div>
-        ) : (
-          <div className="dropout">
-            <div className="dropout__label" style={{ marginTop: 0 }}>
-              Not enough attendance yet to assess risk. A flag appears after about two weeks.
+          <>
+            <div className="profile-hero-card__stat">
+              <span className="profile-hero-card__pct">{Math.round(risk.dropoutProbability * 100)}%</span>
+              <span className="profile-hero-card__pct-label">risk of continued absence</span>
+              {RISK_TAKEAWAY[risk.flag] && <p className="profile-hero-card__takeaway">{RISK_TAKEAWAY[risk.flag]}</p>}
             </div>
-          </div>
+
+            <div className="hero-facts">
+              {features.attendance_rate_w1 != null && (
+                <div className="hero-fact">
+                  <b>{Math.round(features.attendance_rate_w1 * 100)}%</b>
+                  <span>present, 2wk</span>
+                </div>
+              )}
+              <div className="hero-fact">
+                <b>{features.longest_absence_streak}</b>
+                <span>day{features.longest_absence_streak === 1 ? '' : 's'} streak</span>
+              </div>
+              {trendLabel(features.attendance_trend) && (
+                <div className="hero-fact">
+                  <b>{trendLabel(features.attendance_trend)}</b>
+                  <span>trend</span>
+                </div>
+              )}
+            </div>
+
+            {risk.flag !== 'green' && (
+              <div className="profile-hero-card__followup">
+                {followUp.lastAt.has(studentId)
+                  ? `Followed up ${new Date(followUp.lastAt.get(studentId)).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`
+                  : 'Not yet followed up'}
+              </div>
+            )}
+          </>
+        ) : (
+          <p className="profile-hero-card__takeaway profile-hero-card__takeaway--standalone">
+            Not enough attendance yet to assess risk. A flag appears after about two weeks.
+          </p>
         )}
       </div>
 
@@ -182,35 +195,14 @@ export default function StudentProfile({ studentId, className, onBack }) {
         />
       )}
 
-      {assessable && (
+      {assessable && insights.length > 0 && (
       <div className="card">
-        <h2 className="card__title">Why this student is flagged</h2>
-
-        <div className="fact-row">
-          {features.attendance_rate_w1 != null && (
-            <div className="fact-chip">
-              <span className="fact-chip__value">{Math.round(features.attendance_rate_w1 * 100)}%</span>
-              <span className="fact-chip__label">present, last 2 weeks</span>
-            </div>
-          )}
-          <div className="fact-chip">
-            <span className="fact-chip__value">{features.longest_absence_streak}</span>
-            <span className="fact-chip__label">day{features.longest_absence_streak === 1 ? '' : 's'} away in a row</span>
-          </div>
-          {trendLabel(features.attendance_trend) && (
-            <div className="fact-chip">
-              <span className="fact-chip__value">{trendLabel(features.attendance_trend)}</span>
-              <span className="fact-chip__label">trend</span>
-            </div>
-          )}
-        </div>
-
-        {insights.map((text, i) => (
-          <div key={i} className="insight">
-            <span className="insight__icon"><AlertTriangleIcon size={15} /></span>
-            <span>{text}</span>
-          </div>
-        ))}
+        <h2 className="card__title">Why this is happening</h2>
+        <ul className="reason-list">
+          {insights.map((text, i) => (
+            <li key={i} className={`reason-list__item reason-list__item--${risk.flag}`}>{text}</li>
+          ))}
+        </ul>
       </div>
       )}
 
