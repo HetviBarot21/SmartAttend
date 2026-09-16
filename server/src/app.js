@@ -4,6 +4,7 @@ import { createCardHandler } from './attendance/handler.js';
 import { createSyncRouter } from './routes/sync.js';
 import { createRosterRouter } from './routes/roster.js';
 import { createAdminRouter } from './routes/admin.js';
+import { createSystemAdminRouter } from './routes/systemAdmin.js';
 import {
   getAttendanceForDate,
   getRecentChallenges,
@@ -56,6 +57,9 @@ export function createApp({ db, cardHandler = createCardHandler({ db }), logger 
   // the cross-class/cross-teacher admin reporting built on top of them.
   app.use('/api/roster', createRosterRouter({ db }));
   app.use('/api/admin', createAdminRouter({ db }));
+
+  // Platform-wide school list + activate/deactivate, for the system-admin role.
+  app.use('/api/system-admin', createSystemAdminRouter({ db }));
 
   // Manually fire one scan - lets the demo show an outcome without waiting for
   // the 5s emitter tick. Body: { "cardUid": "04A1B2C3" }

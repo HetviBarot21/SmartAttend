@@ -14,6 +14,7 @@ import BottomNav from './components/BottomNav';
 import SideNav from './components/SideNav';
 import AdminOverview from './components/AdminOverview';
 import AdminClassDetail from './components/AdminClassDetail';
+import SystemAdminOverview from './components/SystemAdminOverview';
 import TopBar from './components/TopBar';
 import AccountSheet from './components/AccountSheet';
 import { useOnlineStatus } from './hooks/useOnlineStatus';
@@ -206,12 +207,16 @@ function TeacherApp() {
 }
 
 function AuthGate() {
-  const { status, pinState } = useAuth();
+  const { status, pinState, user } = useAuth();
   const [pinSetupSkipped, setPinSetupSkipped] = useState(false);
 
   if (status === AUTH_STATUS.LOADING) return <div className="centered">Loading SmartAttend…</div>;
   if (status === AUTH_STATUS.SIGNED_OUT) return <LoginScreen />;
   if (status === AUTH_STATUS.LOCKED) return <PinUnlock />;
+
+  // System admin has no class of their own and isn't a field/offline role,
+  // so it skips both the PIN gate below and TeacherApp's class-setup gate.
+  if (user?.role === 'system_admin') return <SystemAdminOverview />;
 
   if (!pinState.enrolled && !pinSetupSkipped) {
     return <PinSetup onDone={() => setPinSetupSkipped(true)} onSkip={() => setPinSetupSkipped(true)} />;

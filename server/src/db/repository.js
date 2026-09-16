@@ -196,6 +196,39 @@ export function upsertSchool(db, { schoolId, name, county = null }) {
   return { schoolId, name, county };
 }
 
+// --------------------------------------------------------------------------- //
+// System admin - platform-wide school list + activate/deactivate.             //
+// No enforcement yet: an 'inactive' school's teachers/admins can still sign   //
+// in, sync and view data as normal. This is display + a status flag only,    //
+// until real authentication (Sprint 2) can gate access on it.                 //
+// --------------------------------------------------------------------------- //
+
+export function getAllSchools(db) {
+  return db
+    .prepare(
+      `SELECT s.school_id AS schoolId, s.name, s.county, s.status, s.created_at AS createdAt,
+              (SELECT COUNT(*) FROM class_groups c WHERE c.school_id = s.school_id) AS classCount,
+              (SELECT COUNT(*) FROM students st
+                 JOIN class_groups c ON c.class_group_id = st.class_group_id
+                WHERE c.school_id = s.school_id AND st.active = 1) AS studentCount
+         FROM schools s
+        ORDER BY s.name`
+    )
+    .all();
+}
+
+export function setSchoolStatus(db, schoolId, status) {
+  if (status !== 'active' && status !== 'inactive') {
+    throw new Error(`invalid status: ${status}`);
+  }
+  const info = db.prepare(`UPDATE schools SET status = ? WHERE school_id = ?`).run(status, schoolId);
+  if (info.changes === 0) return null;
+  logAudit(db, { action: 'school.status_changed', actorId: null, recordId: schoolId, detail: { status } });
+  return db
+    .prepare(`SELECT school_id AS schoolId, name, county, status, created_at AS createdAt FROM schools WHERE school_id = ?`)
+    .get(schoolId);
+}
+
 export function upsertClassGroup(db, { classGroupId, schoolId, grade, stream = null, academicYear, teacherName = null }) {
   db.prepare(
     `INSERT INTO class_groups (class_group_id, school_id, grade, stream, academic_year, teacher_name)

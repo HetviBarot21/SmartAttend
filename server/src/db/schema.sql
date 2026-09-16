@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS schools (
   school_id   TEXT PRIMARY KEY,
   name        TEXT NOT NULL,
   county      TEXT,
+  status      TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive')),
   created_at  TEXT NOT NULL DEFAULT (datetime('now'))
 );
 

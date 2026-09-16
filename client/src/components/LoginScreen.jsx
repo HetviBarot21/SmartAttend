@@ -242,6 +242,17 @@ export default function LoginScreen() {
                 <strong>School admin</strong>
                 <span>See attendance across every class</span>
               </button>
+              <button
+                type="button"
+                className={`role-picker__opt${role === 'system_admin' ? ' role-picker__opt--active' : ''}`}
+                role="radio"
+                aria-checked={role === 'system_admin'}
+                onClick={() => setRole('system_admin')}
+                disabled={busy || blocked}
+              >
+                <strong>System admin</strong>
+                <span>Activate or deactivate schools platform-wide</span>
+              </button>
             </div>
           </div>
 

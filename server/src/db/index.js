@@ -47,6 +47,9 @@ function migrate(db) {
   if (!hasColumn('students', 'guardian_email')) {
     db.exec(`ALTER TABLE students ADD COLUMN guardian_email TEXT`);
   }
+  if (!hasColumn('schools', 'status')) {
+    db.exec(`ALTER TABLE schools ADD COLUMN status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive'))`);
+  }
 }
 
 let singleton = null;

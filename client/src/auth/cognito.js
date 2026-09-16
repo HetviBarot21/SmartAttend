@@ -73,7 +73,7 @@ function sessionFromCognito(cognitoSession, username) {
   };
 }
 
-/** @param {'teacher'|'admin'} role */
+/** @param {'teacher'|'admin'|'system_admin'} role */
 function localSession(username, displayName, role = 'teacher', schoolName = null, now = Date.now()) {
   return {
     key: SESSION_KEY,
@@ -177,7 +177,7 @@ export async function signIn(username, password) {
  * Returns `{ needsConfirmation: true, username }`; the caller then collects the
  * code and calls confirmSignUp() before the account can sign in.
  *
- * @param {'teacher'|'admin'} [role] local mode only - Cognito mode derives role from `cognito:groups`
+ * @param {'teacher'|'admin'|'system_admin'} [role] local mode only - Cognito mode derives role from `cognito:groups`
  * @throws {AuthError} INVALID_INPUT | NETWORK | SIGNUP_FAILED
  */
 export async function signUp({ name, email, password, role = 'teacher', schoolName = null }) {
