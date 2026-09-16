@@ -59,7 +59,12 @@ if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
 
 from compute_labels import LABEL_NAME, build_training_table  # noqa: E402
-from feature_engineering import FEATURE_NAMES, SchoolCalendar, _as_date  # noqa: E402
+from feature_engineering import (  # noqa: E402
+    FEATURE_NAMES,
+    SchoolCalendar,
+    _as_date,
+    categorize_reason,
+)
 from temporal_split import temporal_train_test_split  # noqa: E402
 
 # --------------------------------------------------------------------------- #
@@ -72,7 +77,7 @@ PERSISTENT_ABSENCE_THRESHOLD = 0.30
 FEATURE_BUILD_STEP_DAYS = 14      # cadence of as_of reference dates
 TEST_SIZE = 0.20                  # fraction of distinct SCH-01 dates held for test
 ENROLMENT_MARGIN_DAYS = 14        # drop samples this close to a student's first/last record
-CACHE_VERSION = 1                 # bump to invalidate ml/data/supervised_*.pkl
+CACHE_VERSION = 2                 # bump to invalidate ml/data/supervised_*.pkl
 
 ML_DIR = _HERE.parent
 REPO_ROOT = ML_DIR.parent
@@ -149,6 +154,44 @@ def load_calendar(xlsx_path: Path) -> SchoolCalendar:
     )
 
 
+def load_term_bounds(xlsx_path: Path) -> list[tuple[str, dt.date, dt.date]]:
+    """School Calendar sheet's own ``term`` column -> ``[(name, start, end), ...]``.
+
+    Distinct from :func:`load_calendar`'s flat school-day list (used for rate
+    windows regardless of term structure) - this is specifically the term
+    boundaries `attendance_rate_term` / `days_into_term` need. "Inter-term
+    holiday" is not a real term and is dropped; a reference date landing there
+    correctly gets no enclosing term (features 10-11 come back nan).
+    """
+    raw = pd.read_excel(xlsx_path, sheet_name="School Calendar")
+    raw = raw[raw["term"].astype(str).str.strip() != "Inter-term holiday"]
+    bounds: list[tuple[str, dt.date, dt.date]] = []
+    for name, group in raw.groupby("term"):
+        dates = [_as_date(d) for d in group["date"]]
+        bounds.append((str(name), min(dates), max(dates)))
+    return sorted(bounds, key=lambda t: t[1])
+
+
+def load_absence_reasons(xlsx_path: Path) -> dict[str, dict[dt.date, str]]:
+    """"Absence Reasons" sheet -> ``{student_id: {date: 'fee'|'health'}}``.
+
+    Only categorisable reasons are kept (see
+    :func:`feature_engineering.categorize_reason`); everything else - burial,
+    farm work, "unknown", missing - is simply absent from the per-student dict,
+    which is exactly what `reason_absence_rate` treats as "not fee, not health".
+    """
+    raw = pd.read_excel(xlsx_path, sheet_name="Absence Reasons")
+    out: dict[str, dict[dt.date, str]] = {}
+    for row in raw.itertuples(index=False):
+        category = categorize_reason(row.reason_note)
+        if category is None:
+            continue
+        student_id = str(row.admission_no).strip().upper()
+        day = _as_date(row.date)
+        out.setdefault(student_id, {})[day] = category
+    return out
+
+
 def _drop_out_of_enrolment(table: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
     """Remove samples whose as_of sits outside a student's active span.
 
@@ -185,7 +228,7 @@ def _cache_key(xlsx_path: Path, max_students: int) -> dict:
 def supervised_table(
     xlsx_path: Path, *, max_students: int = 0, rebuild: bool = False
 ) -> pd.DataFrame:
-    """(student_id, as_of, 7 features, label) for one school, with an on-disk cache."""
+    """(student_id, as_of, 11 features, label) for one school, with an on-disk cache."""
     cache = DATA_DIR / f"supervised_{xlsx_path.stem}.pkl"
     key = _cache_key(xlsx_path, max_students)
     if cache.exists() and not rebuild:
@@ -197,16 +240,22 @@ def supervised_table(
 
     events = load_daily_attendance(xlsx_path)
     calendar = load_calendar(xlsx_path)
+    term_bounds = load_term_bounds(xlsx_path)
+    reasons_by_student = load_absence_reasons(xlsx_path)
     if max_students:
         keep = sorted(events["student_id"].unique())[:max_students]
         events = events[events["student_id"].isin(keep)].reset_index(drop=True)
+        reasons_by_student = {k: v for k, v in reasons_by_student.items() if k in set(keep)}
 
     print(
         f"  {xlsx_path.name}: {len(events):,} events, "
         f"{events['student_id'].nunique():,} students, "
         f"{events.attrs.get('dropped_unmapped_status', 0):,} rows dropped (bad status); "
         f"calendar {len(calendar):,} school days "
-        f"({calendar.first_day} .. {calendar.last_day})"
+        f"({calendar.first_day} .. {calendar.last_day}); "
+        f"{len(term_bounds)} terms; "
+        f"{sum(len(v) for v in reasons_by_student.values()):,} categorised absence reasons "
+        f"({len(reasons_by_student):,} students)"
     )
 
     t0 = time.time()
@@ -216,6 +265,8 @@ def supervised_table(
         step_days=FEATURE_BUILD_STEP_DAYS,
         threshold=PERSISTENT_ABSENCE_THRESHOLD,
         drop_unlabelled=True,
+        reasons_by_student=reasons_by_student,
+        term_bounds=term_bounds,
     )
     table = _drop_out_of_enrolment(table, events)
     table = table.dropna(subset=[LABEL_NAME]).reset_index(drop=True)

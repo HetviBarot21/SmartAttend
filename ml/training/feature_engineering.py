@@ -1,18 +1,18 @@
 """Feature engineering for the SmartAttend AI persistent-absenteeism model.
 
-Target model: a Random Forest classifier that predicts **persistent
-absenteeism** - a student missing >= 30% of scheduled school days inside a
-rolling four-week window (label built in :mod:`compute_labels`).
+Target model: a classifier that predicts **persistent absenteeism** - a
+student missing >= 30% of scheduled school days inside a rolling four-week
+window (label built in :mod:`compute_labels`).
 
-This module turns raw attendance events into the fixed **seven-feature** vector
-the classifier consumes. Every calculation runs on the *school-day axis* from
-the Kenya school term calendar (``kenya_calendar.json``): weekends, public
-holidays and any day outside a term are not scheduled school days and are never
-counted. A dated attendance record that does not land on a scheduled school day
-is ignored outright.
+This module turns raw attendance events into the **eleven-feature** vector the
+classifier consumes (see :data:`FEATURE_NAMES`). Every calculation runs on the
+*school-day axis* from the Kenya school term calendar (``kenya_calendar.json``):
+weekends, public holidays and any day outside a term are not scheduled school
+days and are never counted. A dated attendance record that does not land on a
+scheduled school day is ignored outright.
 
-The seven features (see :data:`FEATURE_NAMES`), all computed for a reference
-date ``as_of`` using **only records strictly before ``as_of``**:
+All features are computed for a reference date ``as_of`` using **only records
+strictly before ``as_of``**:
 
 1. ``attendance_rate_w1`` - attendance rate in the most recent two-week window
    ``[as_of - 14d, as_of)``.
@@ -27,12 +27,32 @@ date ``as_of`` using **only records strictly before ``as_of``**:
    there are no absences.
 7. ``attendance_trend`` - ``attendance_rate_w1 - attendance_rate_w2`` (signed;
    positive = improving, negative = worsening).
+8. ``fee_absence_rate`` - fraction of the current four-week window's absences
+   whose recorded reason is fee/money-related (fee arrears, no bus fare, sent
+   home for fees, ...). Needs ``reasons``; 0.0 when there are no absences or no
+   reason data.
+9. ``health_absence_rate`` - fraction of the current four-week window's
+   absences whose recorded reason is health-related (illness, fever, clinic
+   visit, ...). Same fallback as above.
+10. ``attendance_rate_term`` - attendance rate since the start of the term
+    containing ``as_of``, up to ``as_of``. Captures a longer, term-scoped
+    baseline the 2-week windows can't see. ``nan`` without ``term_bounds`` or
+    when ``as_of`` falls outside any term (a holiday).
+11. ``days_into_term`` - scheduled school days from the start of that term up
+    to ``as_of``. Low values flag a student still in the settling-in period at
+    a new term. ``nan`` under the same conditions as above.
 
 "Attendance" means a ``present`` or ``late`` record. A scheduled school day with
 no record counts as an absence - a completed historical window is expected to be
 fully recorded, and a genuine gap is treated conservatively for risk scoring.
 An attendance rate is ``nan`` only when the window contains no scheduled school
 days at all (e.g. it falls entirely in a holiday break).
+
+``reasons`` and ``term_bounds`` are optional everywhere: omit them (the
+default) and features 8-11 come back ``nan``, imputed the same way a
+holiday-only rate window already is. This is what keeps the plain
+``compute_features(records, as_of)`` call every existing test and the JS ports
+use working unchanged.
 """
 
 from __future__ import annotations
@@ -67,7 +87,44 @@ FEATURE_NAMES: tuple[str, ...] = (
     "absence_episode_count",
     "dow_concentration",
     "attendance_trend",
+    "fee_absence_rate",
+    "health_absence_rate",
+    "attendance_rate_term",
+    "days_into_term",
 )
+
+# --------------------------------------------------------------------------- #
+# Absence-reason categorisation                                               #
+#                                                                              #
+# The raw `reason_note` free text (SCH-01/02 "Absence Reasons" sheet) uses a   #
+# fixed vocabulary of ~20 phrases - not truly free text - so a keyword lookup  #
+# is enough; no NLP needed. Two buckets are kept as features because they      #
+# plausibly call for different follow-ups (a fee reminder vs a health check),  #
+# which is the whole point of surfacing them to a teacher. Everything else     #
+# (bereavement, transport, farm work, "unknown", missing) falls through        #
+# uncounted rather than diluting either bucket.                                #
+# --------------------------------------------------------------------------- #
+
+_FEE_REASON_KEYWORDS = (
+    "fee", "fees", "bus fare", "no bus", "transport",
+)
+_HEALTH_REASON_KEYWORDS = (
+    "fever", "illness", "ill", "sick", "unwell", "malaria", "clinic", "medical", "hospital",
+)
+
+
+def categorize_reason(note) -> str | None:
+    """One of 'fee', 'health', or None (anything else / missing / unrecognised)."""
+    if note is None or (isinstance(note, float) and np.isnan(note)):
+        return None
+    text = str(note).strip().lower()
+    if not text or text == "-":
+        return None
+    if any(kw in text for kw in _FEE_REASON_KEYWORDS):
+        return "fee"
+    if any(kw in text for kw in _HEALTH_REASON_KEYWORDS):
+        return "health"
+    return None
 
 # --------------------------------------------------------------------------- #
 # School calendar                                                             #
@@ -304,6 +361,38 @@ def dow_concentration(window: Sequence[tuple[dt.date, bool]]) -> float:
     return max(counts.values()) / len(absent_weekdays)
 
 
+def reason_absence_rate(
+    window: Sequence[tuple[dt.date, bool]],
+    reasons: Mapping[dt.date, str] | None,
+    category: str,
+) -> float:
+    """Fraction of ``window``'s absences whose reason categorises as ``category``.
+
+    0.0 when there are no absences in the window, or no reason data at all -
+    same "nothing to see here" convention as :func:`dow_concentration`, not
+    ``nan``, since an absence with an uncategorised reason is a real, known
+    zero contribution to this bucket rather than a missing measurement.
+    """
+    absences = [day for day, attended in window if not attended]
+    if not absences:
+        return 0.0
+    if not reasons:
+        return 0.0
+    hits = sum(1 for day in absences if reasons.get(day) == category)
+    return hits / len(absences)
+
+
+def _term_containing(
+    term_bounds: Sequence[tuple[str, dt.date, dt.date]] | None, as_of: dt.date
+) -> tuple[dt.date, dt.date] | None:
+    if not term_bounds:
+        return None
+    for _, start, end in term_bounds:
+        if start <= as_of <= end:
+            return start, end
+    return None
+
+
 # --------------------------------------------------------------------------- #
 # Public API                                                                  #
 # --------------------------------------------------------------------------- #
@@ -313,8 +402,10 @@ def compute_features(
     records: Iterable[Mapping],
     as_of,
     calendar: SchoolCalendar = KENYA_SCHOOL_CALENDAR,
+    reasons: Mapping[dt.date, str] | None = None,
+    term_bounds: Sequence[tuple[str, dt.date, dt.date]] | None = None,
 ) -> dict[str, float]:
-    """Seven-feature vector for one student at reference date ``as_of``.
+    """Eleven-feature vector for one student at reference date ``as_of``.
 
     Only records with ``date < as_of`` are used - no future or same-day
     information leaks into the features.
@@ -329,12 +420,20 @@ def compute_features(
         Reference date (exclusive upper bound for feature windows).
     calendar
         School-day calendar; defaults to the Kenya 2026 calendar.
+    reasons
+        Optional ``{date: category}`` for this student's absence reasons,
+        where ``category`` is whatever :func:`categorize_reason` returns
+        (``'fee'`` / ``'health'`` / other). Omit to skip features 8-9 (nan).
+    term_bounds
+        Optional ``[(name, start, end), ...]`` term boundaries. Omit to skip
+        features 10-11 (nan).
 
     Returns
     -------
     dict
         Keys exactly :data:`FEATURE_NAMES`. Rates and the trend may be ``nan``
-        (window has no school days); the counts are always integers-as-floats.
+        (window has no school days, or no term/reason data supplied); the
+        counts are always integers-as-floats.
     """
     as_of = _as_date(as_of)
     by_day = {
@@ -358,6 +457,15 @@ def compute_features(
         else rate_w1 - rate_w2
     )
 
+    term = _term_containing(term_bounds, as_of)
+    if term is None:
+        rate_term = float("nan")
+        days_into_term = float("nan")
+    else:
+        term_start, _term_end = term
+        rate_term = attendance_rate(by_day, calendar, term_start, as_of)
+        days_into_term = float(calendar.count_school_days(term_start, as_of))
+
     return {
         "attendance_rate_w1": rate_w1,
         "attendance_rate_w2": rate_w2,
@@ -366,6 +474,10 @@ def compute_features(
         "absence_episode_count": float(absence_episode_count(current4)),
         "dow_concentration": dow_concentration(current4),
         "attendance_trend": trend,
+        "fee_absence_rate": reason_absence_rate(current4, reasons, "fee"),
+        "health_absence_rate": reason_absence_rate(current4, reasons, "health"),
+        "attendance_rate_term": rate_term,
+        "days_into_term": days_into_term,
     }
 
 

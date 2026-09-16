@@ -1,0 +1,225 @@
+{
+  "generated_at": "2026-09-15T06:47:25+00:00",
+  "baseline_report": "ml/results/evaluation_report.json (2026-09-04, untuned)",
+  "config": {
+    "seed": 42,
+    "n_iter": 25,
+    "cv_splits": 4,
+    "cv_gap_days": 28,
+    "enrolment_margin_days": 14,
+    "features": [
+      "attendance_rate_w1",
+      "attendance_rate_w2",
+      "attendance_rate_w3",
+      "longest_absence_streak",
+      "absence_episode_count",
+      "dow_concentration",
+      "attendance_trend"
+    ]
+  },
+  "datasets": {
+    "sch01_train": {
+      "n_samples": 38291,
+      "n_students": 643,
+      "date_range": [
+        "2017-02-01",
+        "2023-03-22"
+      ],
+      "positives": 10221,
+      "positive_rate": 0.2669295656942885
+    },
+    "sch01_test": {
+      "n_samples": 9384,
+      "n_students": 325,
+      "date_range": [
+        "2023-05-03",
+        "2024-10-16"
+      ],
+      "positives": 2363,
+      "positive_rate": 0.25181159420289856
+    },
+    "sch02_holdout": {
+      "n_samples": 59987,
+      "n_students": 917,
+      "date_range": [
+        "2017-02-01",
+        "2024-10-16"
+      ],
+      "positives": 11467,
+      "positive_rate": 0.19115808425158784
+    }
+  },
+  "models": {
+    "random_forest_tuned": {
+      "best_params": {
+        "class_weight": "balanced_subsample",
+        "max_depth": 6,
+        "max_features": 0.7,
+        "min_samples_leaf": 30,
+        "min_samples_split": 19,
+        "n_estimators": 367
+      },
+      "cv_f1": 0.46681519094439183,
+      "oof_threshold": 0.4700000000000001,
+      "oof_f1_at_threshold": 0.4731263483725729,
+      "feature_importances": {
+        "attendance_rate_w1": 0.3028179922525269,
+        "attendance_rate_w2": 0.16825609310377324,
+        "attendance_rate_w3": 0.3035908226980766,
+        "longest_absence_streak": 0.148834591534062,
+        "absence_episode_count": 0.02811947604584399,
+        "dow_concentration": 0.013939533165547049,
+        "attendance_trend": 0.03444149120017032
+      },
+      "sch01_test_default_0.5": {
+        "precision": 0.3866485013623978,
+        "recall": 0.600507829030893,
+        "f1": 0.47041272998508205,
+        "auc_roc": 0.6902482203350652,
+        "confusion_matrix": {
+          "tn": 4770,
+          "fp": 2251,
+          "fn": 944,
+          "tp": 1419
+        },
+        "support": {
+          "n": 9384,
+          "positives": 2363,
+          "negatives": 7021
+        }
+      },
+      "sch01_test_tuned_threshold": {
+        "precision": 0.3739465446665061,
+        "recall": 0.6572154041472704,
+        "f1": 0.4766728054020872,
+        "auc_roc": 0.6902482203350652,
+        "confusion_matrix": {
+          "tn": 4421,
+          "fp": 2600,
+          "fn": 810,
+          "tp": 1553
+        },
+        "support": {
+          "n": 9384,
+          "positives": 2363,
+          "negatives": 7021
+        }
+      },
+      "sch02_holdout_default_0.5": {
+        "precision": 0.39998762605951865,
+        "recall": 0.5637917502398186,
+        "f1": 0.46796959826275786,
+        "auc_roc": 0.7541881652077207,
+        "confusion_matrix": {
+          "tn": 38822,
+          "fp": 9698,
+          "fn": 5002,
+          "tp": 6465
+        },
+        "support": {
+          "n": 59987,
+          "positives": 11467,
+          "negatives": 48520
+        }
+      },
+      "sch02_holdout_tuned_threshold": {
+        "precision": 0.3759450171821306,
+        "recall": 0.6201273218801779,
+        "f1": 0.46810611546310316,
+        "auc_roc": 0.7541881652077207,
+        "confusion_matrix": {
+          "tn": 36716,
+          "fp": 11804,
+          "fn": 4356,
+          "tp": 7111
+        },
+        "support": {
+          "n": 59987,
+          "positives": 11467,
+          "negatives": 48520
+        }
+      }
+    },
+    "hist_gradient_boosting_tuned": {
+      "best_params": {
+        "l2_regularization": 0.9444298503238986,
+        "learning_rate": 0.053486388862724485,
+        "max_depth": 8,
+        "max_iter": 210,
+        "max_leaf_nodes": 7,
+        "min_samples_leaf": 14
+      },
+      "cv_f1": 0.46797257028552003,
+      "oof_threshold": 0.4700000000000001,
+      "oof_f1_at_threshold": 0.4747521541740017,
+      "sch01_test_default_0.5": {
+        "precision": 0.38773304512293977,
+        "recall": 0.6072788827761321,
+        "f1": 0.4732849604221636,
+        "auc_roc": 0.6917201662650041,
+        "confusion_matrix": {
+          "tn": 4755,
+          "fp": 2266,
+          "fn": 928,
+          "tp": 1435
+        },
+        "support": {
+          "n": 9384,
+          "positives": 2363,
+          "negatives": 7021
+        }
+      },
+      "sch01_test_tuned_threshold": {
+        "precision": 0.3662331630283326,
+        "recall": 0.667371984765129,
+        "f1": 0.47293447293447294,
+        "auc_roc": 0.6917201662650041,
+        "confusion_matrix": {
+          "tn": 4292,
+          "fp": 2729,
+          "fn": 786,
+          "tp": 1577
+        },
+        "support": {
+          "n": 9384,
+          "positives": 2363,
+          "negatives": 7021
+        }
+      },
+      "sch02_holdout_default_0.5": {
+        "precision": 0.3988146156666259,
+        "recall": 0.5691985698090172,
+        "f1": 0.46901160492940036,
+        "auc_roc": 0.7561250819675314,
+        "confusion_matrix": {
+          "tn": 38681,
+          "fp": 9839,
+          "fn": 4940,
+          "tp": 6527
+        },
+        "support": {
+          "n": 59987,
+          "positives": 11467,
+          "negatives": 48520
+        }
+      },
+      "sch02_holdout_tuned_threshold": {
+        "precision": 0.3736137866402874,
+        "recall": 0.6257957617511118,
+        "f1": 0.46788811371193845,
+        "auc_roc": 0.7561250819675314,
+        "confusion_matrix": {
+          "tn": 36489,
+          "fp": 12031,
+          "fn": 4291,
+          "tp": 7176
+        },
+        "support": {
+          "n": 59987,
+          "positives": 11467,
+          "negatives": 48520
+        }
+      }
+    }
+  }
+}

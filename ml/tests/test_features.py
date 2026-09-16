@@ -20,6 +20,7 @@ from feature_engineering import (
     SchoolCalendar,
     _as_date,
     attendance_rate,
+    categorize_reason,
     compute_features,
     normalise_records,
 )
@@ -146,6 +147,80 @@ def test_term_start_absence():
 
 
 # --------------------------------------------------------------------------- #
+# Absence-reason categories + term-relative features                          #
+# --------------------------------------------------------------------------- #
+
+
+def test_categorize_reason():
+    assert categorize_reason("school fees arrears") == "fee"
+    assert categorize_reason("no bus fare") == "fee"
+    assert categorize_reason("fever") == "health"
+    assert categorize_reason("clinic visit") == "health"
+    assert categorize_reason("burial") is None
+    assert categorize_reason("-") is None
+    assert categorize_reason(None) is None
+    assert categorize_reason(float("nan")) is None
+
+
+def test_fee_and_health_absence_rate_without_reasons_is_zero_not_nan():
+    # No reasons supplied at all - a real, known zero, not a missing measurement.
+    feats = compute_features(records(ALWAYS_ABSENT), AS_OF)
+    assert feats["fee_absence_rate"] == 0.0
+    assert feats["health_absence_rate"] == 0.0
+
+
+def test_fee_and_health_absence_rate_with_reasons():
+    # Every absence in the 4-week window is on a school day; tag half of them
+    # fee-related, a quarter health-related, the rest uncategorised.
+    recs = records(ALWAYS_ABSENT)
+    absent_days = sorted(
+        d for d in (
+            AS_OF - timedelta(days=n) for n in range(1, 40)
+        ) if CAL.is_school_day(d) and d < AS_OF
+    )[-20:]  # the 4-week window's 20 school days
+    reasons = {}
+    for i, day in enumerate(absent_days):
+        if i < 10:
+            reasons[day] = "fee"
+        elif i < 15:
+            reasons[day] = "health"
+        # remaining 5 stay uncategorised
+
+    feats = compute_features(recs, AS_OF, reasons=reasons)
+    assert feats["fee_absence_rate"] == pytest.approx(10 / 20)
+    assert feats["health_absence_rate"] == pytest.approx(5 / 20)
+
+
+def test_term_features_without_term_bounds_are_nan():
+    feats = compute_features(records(ALWAYS_PRESENT), AS_OF)
+    assert math.isnan(feats["attendance_rate_term"])
+    assert math.isnan(feats["days_into_term"])
+
+
+def test_term_features_with_term_bounds():
+    # AS_OF (2026-02-16) is 6 school weeks into Term 1 2026 (opens 2026-01-05).
+    feats = compute_features(records(ALWAYS_PRESENT), AS_OF, term_bounds=CAL.terms)
+    assert feats["attendance_rate_term"] == pytest.approx(1.0)
+    assert feats["days_into_term"] == CAL.count_school_days(date(2026, 1, 5), AS_OF)
+
+
+def test_term_features_outside_any_term_are_nan():
+    # 2026-04-20 sits in the holiday gap between Term 1 and Term 2.
+    feats = compute_features(records(ALWAYS_PRESENT), date(2026, 4, 20), term_bounds=CAL.terms)
+    assert math.isnan(feats["attendance_rate_term"])
+    assert math.isnan(feats["days_into_term"])
+
+
+def test_new_features_dont_change_original_seven_when_omitted():
+    """Backward compatibility: calling without reasons/term_bounds still
+    produces exactly the original 7-feature numbers for the other keys."""
+    feats = compute_features(records(MONDAY_ABSENT), AS_OF)
+    assert feats["attendance_rate_w1"] == pytest.approx(0.8)
+    assert feats["longest_absence_streak"] == 1.0
+    assert feats["dow_concentration"] == pytest.approx(1.0)
+
+
+# --------------------------------------------------------------------------- #
 # Feature computation - edge cases                                            #
 # --------------------------------------------------------------------------- #
 
@@ -183,7 +258,14 @@ def test_records_on_non_school_days_are_ignored():
 def test_no_future_records_used():
     past = records(ALWAYS_PRESENT, start=HISTORY_START, end=AS_OF)
     future_absences = records(ALWAYS_ABSENT, start=AS_OF, end=LABEL_END)
-    assert compute_features(past, AS_OF) == compute_features(past + future_absences, AS_OF)
+    a = compute_features(past, AS_OF)
+    b = compute_features(past + future_absences, AS_OF)
+    assert a.keys() == b.keys()
+    for key in a:
+        if math.isnan(a[key]) or math.isnan(b[key]):
+            assert math.isnan(a[key]) and math.isnan(b[key]), key
+        else:
+            assert a[key] == b[key], key
 
 
 def test_as_of_day_itself_is_excluded():

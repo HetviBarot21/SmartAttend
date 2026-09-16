@@ -109,14 +109,22 @@ def build_training_table(
     reference_dates: Iterable[dt.date] | None = None,
     threshold: float = PERSISTENT_ABSENCE_THRESHOLD,
     drop_unlabelled: bool = True,
+    reasons_by_student: Mapping[object, Mapping[dt.date, str]] | None = None,
+    term_bounds: list[tuple[str, dt.date, dt.date]] | None = None,
 ) -> pd.DataFrame:
     """Assemble the full supervised table: one row per (student, ``as_of``).
 
-    Columns: ``student_id``, ``as_of``, the seven :data:`FEATURE_NAMES`, and
+    Columns: ``student_id``, ``as_of``, the eleven :data:`FEATURE_NAMES`, and
     :data:`LABEL_NAME`. Rows whose forward window has no school days are dropped
-    when ``drop_unlabelled`` is true.
+    when ``drop_unlabelled`` is true. ``reasons_by_student`` and ``term_bounds``
+    are optional and passed straight through to
+    :func:`feature_engineering.compute_features` per student - omit both to get
+    exactly the original seven-feature behaviour (the new four columns come
+    back ``nan``, same as any other reference this pipeline had no data for).
     """
     from feature_engineering import FEATURE_NAMES, _columns
+
+    reasons_by_student = reasons_by_student or {}
 
     df = events if isinstance(events, pd.DataFrame) else pd.DataFrame(list(events))
     if df.empty:
@@ -143,11 +151,14 @@ def build_training_table(
 
     rows = []
     for student_id, recs in per_student.items():
+        student_reasons = reasons_by_student.get(student_id)
         for as_of in reference_dates:
             label = compute_label(recs, as_of, calendar, threshold=threshold)
             if drop_unlabelled and np.isnan(label):
                 continue
-            feats = compute_features(recs, as_of, calendar)
+            feats = compute_features(
+                recs, as_of, calendar, reasons=student_reasons, term_bounds=term_bounds
+            )
             rows.append({"student_id": student_id, "as_of": as_of, **feats, LABEL_NAME: label})
 
     table = pd.DataFrame(rows)
