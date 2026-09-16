@@ -1,0 +1,23 @@
+# Tier 2 (server/) only - client stays native for dev (Vite HMR), ml/ runs on
+# Colab, aws/ isn't containerized here. See server/.env.example for every
+# variable this service accepts; the two below are the only ones that need a
+# container-specific value.
+services:
+  server:
+    build: ./server
+    ports:
+      - "3000:3000"
+    environment:
+      PORT: 3000
+      # Outside OneDrive/the repo by default already (see config.js), but
+      # pinned explicitly here so the DB always lands on the named volume
+      # below instead of the container's ephemeral /tmp.
+      DB_PATH: /data/smartattend.db
+      # Uncomment once the local API-Gateway shim (or real AWS) exists:
+      # SYNC_API_GATEWAY_URL: http://host.docker.internal:4000/sync
+    volumes:
+      - smartattend-db:/data
+    restart: unless-stopped
+
+volumes:
+  smartattend-db:
