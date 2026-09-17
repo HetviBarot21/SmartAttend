@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { getStudentById, getStudentHistory, getFollowUpSummary } from '../db/database';
 import {
   computeFeatures,
-  scoreRisk,
+  scoreRiskML,
   weeklyTrend,
   riskInsights,
   isAssessable,
@@ -112,7 +112,7 @@ export default function StudentProfile({ studentId, className, onBack }) {
     const asOf = toISO(new Date());
     const rows = history.map((r) => ({ date: r.date, status: r.status }));
     const features = computeFeatures(rows, asOf);
-    const risk = scoreRisk(features);
+    const risk = scoreRiskML(rows, asOf);
     const trend = weeklyTrend(rows, asOf, 6);
     const insights = riskInsights(rows, features, risk, asOf);
 

@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { getStudentsByClass, getClassHistory, getFollowUpSummary } from '../db/database';
 import {
   computeFeatures,
-  scoreRisk,
+  scoreRiskML,
   riskInsights,
   riskHeadline,
   isAssessable,
@@ -59,7 +59,7 @@ export default function Alerts({ classGroupId, className, onOpenProfile }) {
       .map((student) => {
         const rows = byStudent.get(student.studentId) ?? [];
         const features = computeFeatures(rows, asOf);
-        const risk = scoreRisk(features);
+        const risk = scoreRiskML(rows, asOf);
         return { student, features, risk, rows, assessable: isAssessable(rows) };
       })
       .filter((r) => r.assessable && r.risk.flag !== 'green')

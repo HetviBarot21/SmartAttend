@@ -1,23 +1,32 @@
 /**
- * Client-side absenteeism risk — a JS port of the transparent rule-based scorer
- * in `ml/training/train.py` (`RuleBasedScorer`) and the feature windows in
- * `ml/training/feature_engineering.py`.
+ * Client-side absenteeism risk.
  *
- * The trained Random Forest (`ml/models/rf_model.pkl`) is the real model, but it
- * runs server-side and isn't wired to the PWA yet. Until it is, the teacher
- * still needs the amber/red flags on the Alerts and Profile screens, so we
- * compute the same seven features and the same weighted score from the
- * attendance history already in IndexedDB. Keep this module free of React and
- * Dexie so it can run in a Web Worker and be unit-tested directly.
+ * Two scorers live here:
+ *   - `scoreRisk` - the original transparent rule-based scorer (four weighted
+ *     features, hand-set thresholds). Kept for its narrative/breakdown value
+ *     and as a fallback.
+ *   - `scoreRiskML` - the real trained model (HistGradientBoosting, 11
+ *     features, F1 0.480/0.484 vs the rule-based scorer's 0.350/0.342 on the
+ *     held-out evaluation - see ml/results/evaluation_report.json). This is
+ *     what Alerts/StudentProfile actually call now. The app is offline-first,
+ *     so "use the trained model" can't mean a network call to a Python
+ *     service - `data/riskModel.json` is the model's tree ensemble exported
+ *     to plain arrays (`ml/training/export_model.py`), walked here with
+ *     ordinary arithmetic. Re-export and copy that file over whenever the
+ *     model is retrained.
  *
- * Feature/label conventions mirror the Python pipeline:
+ * Feature/label conventions mirror the Python pipeline (`ml/training/`):
  *   - windows are calendar-time (14 / 28 days) counting only school days;
- *   - a school day is Mon–Fri (the Python side uses the real term calendar —
- *     good enough here, and documented as a known simplification);
+ *   - a school day is Mon–Fri (the Python training pipeline used each
+ *     school's own calendar sheet; this is a documented simplification,
+ *     applied consistently across every feature here so the model at least
+ *     sees internally-consistent inputs);
  *   - a scheduled school day with no record counts as an absence;
  *   - present + late both count as "attended";
  *   - an attendance rate is null only when a window contains zero school days.
  */
+
+import mlModel from '../data/riskModel.json';
 
 export const FEATURE_NAMES = [
   'attendance_rate_w1',
@@ -149,6 +158,26 @@ export function computeFeatures(history, asOf = toISO(new Date())) {
   };
 }
 
+// --------------------------------------------------------------------------- //
+// Kenya term calendar - needed for attendance_rate_term / days_into_term,    //
+// the model's two strongest features by a wide margin (see                   //
+// ml/results/evaluation_report.json feature_importances). Only 2026 is       //
+// defined; outside a known term these two features fall back to null         //
+// (same "not enough information" convention as every other rate here), so    //
+// the model just leans more on the other 9 rather than breaking. Update this //
+// list at the start of each school year - ml/training/kenya_calendar.json    //
+// is the source of truth, kept in sync by hand (it's 3 short entries/year).  //
+// --------------------------------------------------------------------------- //
+const KENYA_TERMS = [
+  { name: 'Term 1 2026', start: '2026-01-05', end: '2026-04-03' },
+  { name: 'Term 2 2026', start: '2026-05-04', end: '2026-08-07' },
+  { name: 'Term 3 2026', start: '2026-09-01', end: '2026-12-04' },
+];
+
+function termContaining(asOf) {
+  return KENYA_TERMS.find((t) => t.start <= asOf && asOf <= t.end) ?? null;
+}
+
 /** Recorded school-day observations in the history. */
 export function recordedSchoolDays(history) {
   return history.filter((r) => isSchoolDay(r.date) && r.status).length;
@@ -214,6 +243,99 @@ export function breakdownRows(components) {
     { key: 'monthly_rate', label: 'Monthly rate', value: components.monthly_rate },
     { key: 'trend', label: 'Trend direction', value: components.trend },
   ];
+}
+
+// --------------------------------------------------------------------------- //
+// scoring — trained model (HistGradientBoosting, exported tree ensemble)      //
+// --------------------------------------------------------------------------- //
+
+/**
+ * The 4 features beyond the original 7 the trained model uses.
+ *
+ * fee_absence_rate / health_absence_rate always come back 0 here - the app
+ * doesn't collect a reason when a teacher marks a student absent, so there is
+ * nothing to categorise. 0 (not null) matches the training pipeline's own
+ * convention for "no reason data" (ml/training/feature_engineering.py
+ * `reason_absence_rate`) - these two are the model's least important
+ * features anyway (0.046 / 0.038 importance), so losing them costs little.
+ * Collecting a reason at mark-absent time would let these contribute for
+ * real; that's a separate product change, not done here.
+ */
+export function computeMlExtraFeatures(history, asOf = toISO(new Date())) {
+  const byDate = new Map(history.map((r) => [r.date, r.status]));
+  const term = termContaining(asOf);
+
+  let rate_term = null;
+  let days_into_term = null;
+  if (term) {
+    const days = schoolDaysBetween(term.start, asOf);
+    days_into_term = days.length;
+    rate_term = days.length
+      ? days.filter((d) => ATTENDED.has(byDate.get(d))).length / days.length
+      : null;
+  }
+
+  return {
+    fee_absence_rate: 0,
+    health_absence_rate: 0,
+    attendance_rate_term: rate_term,
+    days_into_term,
+  };
+}
+
+const sigmoid = (x) => 1 / (1 + Math.exp(-x));
+
+/** Walk one exported tree from the root; returns its leaf `value`. */
+function walkTree(tree, featureVector) {
+  let i = 0;
+  while (!tree.isLeaf[i]) {
+    const v = featureVector[tree.feature[i]];
+    const goLeft = v == null || Number.isNaN(v) ? tree.missingLeft[i] : v <= tree.threshold[i];
+    i = goLeft ? tree.left[i] : tree.right[i];
+  }
+  return tree.value[i];
+}
+
+/**
+ * Run the exported HistGradientBoosting ensemble on an 11-feature vector
+ * (ordered per `mlModel.features` - see `scoreRiskFromFeatures`).
+ * @returns {number} probability of persistent absenteeism, 0..1
+ */
+export function predictMlProbability(orderedFeatures) {
+  let raw = mlModel.baseline;
+  for (const tree of mlModel.trees) raw += walkTree(tree, orderedFeatures);
+  return sigmoid(raw);
+}
+
+/**
+ * Score from an already-computed 11-feature object (the 7 from
+ * `computeFeatures` plus the 4 from `computeMlExtraFeatures`, merged).
+ * Same return shape as `scoreRisk` (`components` is empty; the rule-based
+ * breakdown doesn't apply to a learned model) so it's a drop-in replacement
+ * wherever `scoreRisk(computeFeatures(...))` was used.
+ */
+export function scoreRiskFromFeatures(allFeatures) {
+  const ordered = mlModel.features.map((name) => {
+    const v = allFeatures[name];
+    return v == null || Number.isNaN(v) ? null : v;
+  });
+  const dropoutProbability = clip01(predictMlProbability(ordered));
+
+  const flag =
+    dropoutProbability >= mlModel.redThreshold
+      ? 'red'
+      : dropoutProbability >= mlModel.amberThreshold
+        ? 'amber'
+        : 'green';
+
+  return { score: dropoutProbability, flag, dropoutProbability, overridden: false, components: {} };
+}
+
+/** Score a student straight from their attendance history - what Alerts/StudentProfile call. */
+export function scoreRiskML(history, asOf = toISO(new Date())) {
+  const base = computeFeatures(history, asOf);
+  const extra = computeMlExtraFeatures(history, asOf);
+  return scoreRiskFromFeatures({ ...base, ...extra });
 }
 
 // --------------------------------------------------------------------------- //
@@ -293,6 +415,12 @@ export function riskInsights(history, features, risk, asOf = toISO(new Date())) 
 
   if (risk.flag === 'red' && out.length === 0) {
     out.push('This pattern points to a high risk of continued absence without a check-in.');
+  } else if (risk.flag === 'amber' && out.length === 0) {
+    // No single strong signal, but scoreRiskML flagged it anyway - the
+    // trained model weighs the full attendance picture (including the
+    // term-to-date rate), not just the handful of patterns worded above.
+    // Saying "normal range" here would flatly contradict the amber badge.
+    out.push('No single strong reason stands out, but the overall pattern is still worth a check-in.');
   }
 
   if (out.length === 0) out.push('Attendance is within the normal range this month.');

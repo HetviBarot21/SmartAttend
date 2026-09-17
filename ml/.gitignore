@@ -3,8 +3,12 @@
 
 # cached supervised tables (rebuilt from the xlsx)
 data/*.pkl
-# trained models (rf_model.pkl is ~80 MB)
+# trained models (rf_model.pkl is ~80 MB) and their exported JSON - the
+# canonical copy of an export lives at client/src/data/riskModel.json and
+# server/src/data/riskModel.json (tracked there); regenerate this one with
+# training/export_model.py if you need it locally.
 models/*.pkl
+models/*.json
 
 venv/
 __pycache__/

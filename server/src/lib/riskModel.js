@@ -1,15 +1,28 @@
 /**
- * Server-side port of the same rule-based absenteeism scorer as
- * `client/src/lib/riskModel.js` (itself a port of `RuleBasedScorer` in
- * `ml/training/train.py`). Kept deliberately duplicated rather than shared -
- * client and server already mirror each other's domain logic throughout this
- * codebase (see e.g. `client/src/db/database.js` vs `db/repository.js`).
+ * Server-side absenteeism risk. Two scorers, same as the client
+ * (client/src/lib/riskModel.js):
+ *   - `scoreRisk` - the original transparent rule-based scorer. Kept as a
+ *     fallback/reference.
+ *   - `assessStudent` - the real trained model (HistGradientBoosting, 11
+ *     features, F1 0.480/0.484 vs the rule-based scorer's 0.350/0.342 - see
+ *     ml/results/evaluation_report.json). This is what `getFlaggedStudents`
+ *     (db/repository.js) actually calls now. `data/riskModel.json` is the
+ *     model's tree ensemble exported to plain arrays
+ *     (ml/training/export_model.py) and walked here with ordinary
+ *     arithmetic - no Python runtime needed server-side either. Re-export
+ *     and copy that file over whenever the model is retrained.
  *
- * Used by `getFlaggedStudents` (db/repository.js) so the admin endpoints can
- * compute risk flags directly from `attendance_events` without a live ML
- * inference service (the trained RF pickle in ml/models/ isn't wired to an
- * endpoint - see PROJECT_CONTEXT.md).
+ * Deliberately duplicated from the client rather than shared - client and
+ * server already mirror each other's domain logic throughout this codebase
+ * (see e.g. client/src/db/database.js vs db/repository.js).
  */
+
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
+
+const here = dirname(fileURLToPath(import.meta.url));
+const mlModel = JSON.parse(readFileSync(join(here, '..', 'data', 'riskModel.json'), 'utf8'));
 
 const WINDOW_DAYS = 14;
 const MONTH_DAYS = 28;
@@ -65,18 +78,20 @@ export function computeFeatures(history, asOf = toISO(new Date())) {
     return attended / days.length;
   };
 
-  const w1End = asOf;
   const w1Start = addDays(asOf, -WINDOW_DAYS);
   const w2Start = addDays(asOf, -WINDOW_DAYS * 2);
+  const w3Start = addDays(asOf, -WINDOW_DAYS * 3);
 
-  const rate_w1 = windowRate(w1Start, w1End);
+  const rate_w1 = windowRate(w1Start, asOf);
   const rate_w2 = windowRate(w2Start, w1Start);
+  const rate_w3 = windowRate(w3Start, w2Start);
 
   const monthDays = schoolDaysBetween(addDays(asOf, -MONTH_DAYS), asOf);
   const isAbsent = (d) => !ATTENDED.has(byDate.get(d));
 
   let longestStreak = 0;
   let currentStreak = 0;
+  let episodes = 0;
   let prevAbsent = false;
   const dowCounts = new Map();
   let totalAbsences = 0;
@@ -85,6 +100,7 @@ export function computeFeatures(history, asOf = toISO(new Date())) {
     if (isAbsent(d)) {
       currentStreak += 1;
       longestStreak = Math.max(longestStreak, currentStreak);
+      if (!prevAbsent) episodes += 1;
       const g = parseISO(d).getDay();
       dowCounts.set(g, (dowCounts.get(g) || 0) + 1);
       totalAbsences += 1;
@@ -94,7 +110,6 @@ export function computeFeatures(history, asOf = toISO(new Date())) {
       prevAbsent = false;
     }
   }
-  void prevAbsent;
 
   const maxDow = dowCounts.size ? Math.max(...dowCounts.values()) : 0;
   const dow_concentration = totalAbsences === 0 ? 0 : maxDow / totalAbsences;
@@ -103,7 +118,9 @@ export function computeFeatures(history, asOf = toISO(new Date())) {
   return {
     attendance_rate_w1: rate_w1,
     attendance_rate_w2: rate_w2,
+    attendance_rate_w3: rate_w3,
     longest_absence_streak: longestStreak,
+    absence_episode_count: episodes,
     dow_concentration,
     attendance_trend,
   };
@@ -144,9 +161,82 @@ export function scoreRisk(f) {
   return { score, flag, dropoutProbability, overridden };
 }
 
-/** Score one student's history in a single call. Returns null if not assessable. */
+// --------------------------------------------------------------------------- //
+// trained model                                                               //
+// --------------------------------------------------------------------------- //
+
+// Same source and same caveat as the client copy: only 2026 is defined, and
+// this needs updating by hand at the start of each school year (it's 3 short
+// entries) - ml/training/kenya_calendar.json is the source of truth.
+const KENYA_TERMS = [
+  { name: 'Term 1 2026', start: '2026-01-05', end: '2026-04-03' },
+  { name: 'Term 2 2026', start: '2026-05-04', end: '2026-08-07' },
+  { name: 'Term 3 2026', start: '2026-09-01', end: '2026-12-04' },
+];
+
+function termContaining(asOf) {
+  return KENYA_TERMS.find((t) => t.start <= asOf && asOf <= t.end) ?? null;
+}
+
+/**
+ * The 4 features beyond the original 7. fee/health absence rate always come
+ * back 0 - this server has no absence-reason data (no such column exists),
+ * same "no reason data ⇒ 0, not nan" convention the training pipeline uses.
+ */
+export function computeMlExtraFeatures(history, asOf = toISO(new Date())) {
+  const byDate = new Map(history.map((r) => [r.date, r.status]));
+  const term = termContaining(asOf);
+
+  let rate_term = null;
+  let days_into_term = null;
+  if (term) {
+    const days = schoolDaysBetween(term.start, asOf);
+    days_into_term = days.length;
+    rate_term = days.length
+      ? days.filter((d) => ATTENDED.has(byDate.get(d))).length / days.length
+      : null;
+  }
+
+  return { fee_absence_rate: 0, health_absence_rate: 0, attendance_rate_term: rate_term, days_into_term };
+}
+
+const sigmoid = (x) => 1 / (1 + Math.exp(-x));
+
+function walkTree(tree, featureVector) {
+  let i = 0;
+  while (!tree.isLeaf[i]) {
+    const v = featureVector[tree.feature[i]];
+    const goLeft = v == null || Number.isNaN(v) ? tree.missingLeft[i] : v <= tree.threshold[i];
+    i = goLeft ? tree.left[i] : tree.right[i];
+  }
+  return tree.value[i];
+}
+
+export function predictMlProbability(orderedFeatures) {
+  let raw = mlModel.baseline;
+  for (const tree of mlModel.trees) raw += walkTree(tree, orderedFeatures);
+  return sigmoid(raw);
+}
+
+export function scoreRiskFromFeatures(allFeatures) {
+  const ordered = mlModel.features.map((name) => {
+    const v = allFeatures[name];
+    return v == null || Number.isNaN(v) ? null : v;
+  });
+  const dropoutProbability = clip01(predictMlProbability(ordered));
+  const flag =
+    dropoutProbability >= mlModel.redThreshold
+      ? 'red'
+      : dropoutProbability >= mlModel.amberThreshold
+        ? 'amber'
+        : 'green';
+  return { score: dropoutProbability, flag, dropoutProbability, overridden: false };
+}
+
+/** Score one student's history in a single call, using the trained model. Returns null if not assessable. */
 export function assessStudent(history, asOf = toISO(new Date())) {
   if (!isAssessable(history)) return null;
   const features = computeFeatures(history, asOf);
-  return { features, ...scoreRisk(features) };
+  const extra = computeMlExtraFeatures(history, asOf);
+  return { features, ...scoreRiskFromFeatures({ ...features, ...extra }) };
 }
