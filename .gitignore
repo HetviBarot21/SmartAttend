@@ -9,6 +9,9 @@ venv/
 *.egg-info/
 ml/models/*.pkl
 ml/data/*.csv
+
+# Colab export - duplicates ml/training + the xlsx data, not worth tracking
+colab/
 .DS_Store
 dist/
 
