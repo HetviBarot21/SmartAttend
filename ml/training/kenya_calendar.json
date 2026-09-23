@@ -14,6 +14,8 @@
     { "date": "2026-04-06", "name": "Easter Monday" },
     { "date": "2026-05-01", "name": "Labour Day" },
     { "date": "2026-06-01", "name": "Madaraka Day" },
+    { "date": "2026-03-20", "name": "Idd-ul-Fitr", "note": "astronomically-projected date, pending official moon-sighting gazette confirmation" },
+    { "date": "2026-05-27", "name": "Idd-ul-Azha", "note": "astronomically-projected date, pending official moon-sighting gazette confirmation" },
     { "date": "2026-10-10", "name": "Moi Day" },
     { "date": "2026-10-20", "name": "Mashujaa Day" },
     { "date": "2026-12-12", "name": "Jamhuri Day" },
