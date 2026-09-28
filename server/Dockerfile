@@ -1,13 +1,9 @@
-# node:22-slim (Debian, glibc) rather than alpine: better-sqlite3 ships
-# prebuilt binaries for glibc, so this avoids needing a C++ toolchain in the
-# image (see README's Windows/Visual-Studio note for the same underlying issue).
+# Debian slim, not alpine: better-sqlite3 ships prebuilt binaries for glibc.
 FROM node:22-slim
 
 WORKDIR /app
 
-# better-sqlite3 has no prebuilt binary for every base-image/arch combo, so it
-# falls back to building from source (node-gyp) - these are that fallback's
-# only requirements, removed again in the same layer to keep the image small.
+# Build tools in case better-sqlite3 has to compile, removed in the same layer.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends python3 make g++ \
   && rm -rf /var/lib/apt/lists/*

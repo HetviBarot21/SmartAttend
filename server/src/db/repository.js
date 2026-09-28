@@ -7,7 +7,6 @@ export function todayISO(now = new Date()) {
   return new Date(now.getTime() - offset).toISOString().split('T')[0];
 }
 
-/** Raised when a student already has an attendance record for a date. */
 export class DuplicateAttendanceError extends Error {
   constructor(studentId, date) {
     super(`Attendance already recorded for ${studentId} on ${date}`);
@@ -20,7 +19,7 @@ export class DuplicateAttendanceError extends Error {
 const isUniqueViolation = (err) =>
   err && (err.code === 'SQLITE_CONSTRAINT_UNIQUE' || err.code === 'SQLITE_CONSTRAINT_PRIMARYKEY');
 
-/** Resolve an RFID card UID to its active student. Returns null if unknown. */
+/** The active student holding this card, or null. */
 export function findStudentByCardUid(db, cardUid) {
   return db
     .prepare(
@@ -34,9 +33,7 @@ export function findStudentByCardUid(db, cardUid) {
 
 /**
  * Write one attendance record, its sync-queue entry and an audit row in a
- * single transaction - exactly the client's atomicity guarantee: if the unique
- * index rejects the event, the queue entry rolls back with it, so the sync
- * layer can never ship a record the database does not hold.
+ * single transaction.
  *
  * @throws {DuplicateAttendanceError}
  */
@@ -67,9 +64,7 @@ export function recordAttendance(db, event) {
       )
       .run({ eventId, studentId, date, status, captureMethod, verified: verified ? 1 : 0, recordedBy, source });
 
-    // Snapshot the record in the shape the sync Lambda expects
-    // (attendanceSync.schema.js). createdAt must be an RFC3339 timestamp, so it
-    // is generated here rather than read back from the row's `datetime('now')`.
+    // createdAt must be RFC3339, so it is generated here rather than by SQLite.
     const payload = JSON.stringify({
       eventId,
       studentId,
@@ -175,18 +170,7 @@ export function getStats(db, date = todayISO()) {
   };
 }
 
-// --------------------------------------------------------------------------- //
-// Roster - upserts pushed from the PWA (client/src/services/rosterSyncService)  //
-//                                                                               //
-// The server's schools/class_groups/students tables were, until now, only fed  //
-// by the RFID simulation demo roster. A class or student created in the PWA    //
-// has no server-side row at all, so its attendance sync fails with             //
-// `unknown_student` and it is invisible to the admin endpoints below. These    //
-// upserts are how a teacher's device roster becomes the shared source of       //
-// truth an admin can report on. All idempotent - same INSERT..ON CONFLICT      //
-// idiom as db/seed.js so a re-push (retry after a dropped connection) repairs  //
-// rather than throws.                                                          //
-// --------------------------------------------------------------------------- //
+// Roster upserts pushed from the PWA. All idempotent so a retry is safe.
 
 export function upsertSchool(db, { schoolId, name, county = null }) {
   db.prepare(
@@ -196,12 +180,7 @@ export function upsertSchool(db, { schoolId, name, county = null }) {
   return { schoolId, name, county };
 }
 
-// --------------------------------------------------------------------------- //
-// System admin - platform-wide school list + activate/deactivate.             //
-// No enforcement yet: an 'inactive' school's teachers/admins can still sign   //
-// in, sync and view data as normal. This is display + a status flag only,    //
-// until real authentication (Sprint 2) can gate access on it.                 //
-// --------------------------------------------------------------------------- //
+// System admin. The school status flag is not enforced on sign-in yet.
 
 export function getAllSchools(db) {
   return db
@@ -280,7 +259,7 @@ export function patchStudent(db, studentId, patch = {}) {
   db.prepare(`UPDATE students SET ${fields.join(', ')} WHERE student_id = @studentId`).run(params);
 }
 
-/** One active card per student - deactivate any other active card first (mirrors the partial unique index). */
+/** One active card per student, so any other active card is deactivated first. */
 export function upsertCard(db, { cardUid, studentId }) {
   const tx = db.transaction(() => {
     db.prepare(`UPDATE rfid_cards SET active = 0 WHERE student_id = ? AND active = 1 AND card_uid != ?`).run(studentId, cardUid);
@@ -293,9 +272,7 @@ export function upsertCard(db, { cardUid, studentId }) {
   return { cardUid, studentId };
 }
 
-// --------------------------------------------------------------------------- //
-// Admin reporting - cross-class / cross-teacher views over one school          //
-// --------------------------------------------------------------------------- //
+// Admin reporting across one school
 
 export function getClassesForSchool(db, schoolId) {
   return db
@@ -332,7 +309,6 @@ export function getStudentsForClass(db, classGroupId, { includeInactive = false 
     .all(classGroupId);
 }
 
-/** Attendance rows for a set of students since a date, shaped for the risk model. */
 function historyByStudent(db, studentIds, sinceISO) {
   const byStudent = new Map(studentIds.map((id) => [id, []]));
   if (studentIds.length === 0) return byStudent;
@@ -350,7 +326,7 @@ function daysAgoISO(n) {
   return todayISO(dt);
 }
 
-/** Most recent follow_ups row per student, for the "needs follow-up" freshness check. */
+/** Most recent follow-up per student. */
 function latestFollowUpByStudent(db, studentIds) {
   const out = new Map();
   if (studentIds.length === 0) return out;
@@ -365,10 +341,8 @@ function latestFollowUpByStudent(db, studentIds) {
 }
 
 /**
- * Every active, assessable student in a school with a non-green flag, richest
- * first. `needsFollowUp` is true when there is no follow_ups row in the last
- * FOLLOW_UP_FRESH_DAYS - i.e. never contacted, or flagged again since the last
- * contact went stale.
+ * Every assessable student in a school with an amber or red flag. `needsFollowUp`
+ * is true when nobody has followed up in the last FOLLOW_UP_FRESH_DAYS.
  */
 export function getFlaggedStudents(db, schoolId) {
   const students = db
@@ -444,9 +418,7 @@ export function getSchoolOverview(db, schoolId) {
   };
 }
 
-// --------------------------------------------------------------------------- //
-// Follow-ups                                                                  //
-// --------------------------------------------------------------------------- //
+// Follow-ups
 
 export function addFollowUp(db, { studentId, flag, method, note = null, actor = null }) {
   const info = db

@@ -1,8 +1,6 @@
 /**
- * JSON Schema (draft 2020-12) for the payload the PWA POSTs to /api/sync and
- * that the server in turn forwards to the AWS sync Lambda. Keep this in step
- * with aws/lambda/lib/attendanceSync.schema.js - the two are deliberately
- * duplicated so the Lambda can be deployed on its own.
+ * JSON Schema for /api/sync batches. Keep in step with
+ * aws/lambda/lib/attendanceSync.schema.js.
  */
 
 export const attendanceRecordSchema = {

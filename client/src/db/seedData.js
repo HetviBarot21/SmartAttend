@@ -14,9 +14,7 @@ export const DEMO_CLASS = {
   demo: true,
 };
 
-// Student IDs are fixed rather than random so a reseed keeps the same identities:
-// attendance history, risk scores and RFID card bindings all key on studentId,
-// and a demo that regenerates them every load cannot show a trend over time.
+// Fixed IDs so a reseed keeps the same students.
 export const DEMO_STUDENTS = [
   { studentId: 'stu-form3b-001', admissionNo: '3B/001', fullName: 'Amina Wanjiru' },
   { studentId: 'stu-form3b-002', admissionNo: '3B/002', fullName: 'Brian Kamau' },
@@ -30,16 +28,7 @@ export const DEMO_STUDENTS = [
   { studentId: 'stu-form3b-010', admissionNo: '3B/010', fullName: 'Naomi Waweru' }
 ].map((s) => ({ ...s, classGroupId: DEMO_CLASS_ID, enrolledAt: '2026-01-06' }));
 
-/**
- * Load the sample class (Form 3 B + 10 students) on demand - the "Load a sample
- * class" option in the setup wizard, so the Heatmap / Alerts screens have
- * something to show before a real roster is entered.
- *
- * No longer runs automatically on every screen load: a teacher who has created
- * their own class should never see the demo names appear. Idempotent - adds the
- * class and any missing demo students, repairs an older demo class row that
- * predates the `active` / `createdAt` fields.
- */
+/** Load the Form 3 B sample class. Safe to run more than once. */
 export async function seedDemoClass() {
   await db.transaction('rw', db.classGroups, db.students, async () => {
     const cls = await db.classGroups.where('classGroupId').equals(DEMO_CLASS_ID).first();
@@ -58,15 +47,7 @@ export async function seedDemoClass() {
   return { classGroupId: DEMO_CLASS_ID, count: DEMO_STUDENTS.length };
 }
 
-// --------------------------------------------------------------------------- //
-// Demo attendance history                                                     //
-//                                                                             //
-// The Heatmap, Alerts and Profile screens need weeks of history to show a     //
-// trend or a risk flag. This backfills ~11 weeks of plausible records so the  //
-// screens are demoable on a fresh device. It is deterministic (a reseed gives //
-// the identical history) and it runs ONLY when the log is empty, so it never  //
-// touches attendance a teacher actually recorded.                             //
-// --------------------------------------------------------------------------- //
+// Demo attendance history. Deterministic, and only written when the log is empty.
 
 const HISTORY_WEEKS = 11;
 
@@ -93,25 +74,24 @@ function isoAddDays(iso, n) {
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
 }
 
-// ctx: { rand [0,1), dow 0-6, idx school-day index from start, fromEnd days-left,
-//        total school days }. Returns 'present' | 'absent' | 'late'.
+// Each profile maps { rand, fromEnd } to a status. fromEnd counts school days left.
 const HISTORY_PROFILES = {
-  // steady, high attendance — stays green
+  // green
   steady: ({ rand }) => (rand < 0.04 ? 'absent' : rand < 0.1 ? 'late' : 'present'),
 
-  // punctuality slips, attendance fine — stays green
+  // often late, green
   latecomer: ({ rand }) => (rand < 0.05 ? 'absent' : rand < 0.34 ? 'late' : 'present'),
 
-  // fine for weeks, then a hard collapse ending in a 6-day streak — RED
+  // collapses into a 6-day absence streak: red
   declining: ({ rand, fromEnd }) => {
     if (fromEnd <= 6) return 'absent';
     const p = fromEnd <= 22 ? 0.14 + (22 - fromEnd) * 0.02 : 0.06;
     return rand < p ? 'absent' : rand < p + 0.08 ? 'late' : 'present';
   },
 
-  // a rough patch: a short block ~2 weeks ago + slightly raised absence since — AMBER
+  // a 2-day block two weeks ago, then slightly more absences: amber
   wobbling: ({ rand, fromEnd }) => {
-    if (fromEnd >= 12 && fromEnd <= 13) return 'absent'; // a 2-day blip
+    if (fromEnd >= 12 && fromEnd <= 13) return 'absent';
     const p = fromEnd <= 18 ? 0.16 : 0.06;
     return rand < p ? 'absent' : rand < p + 0.1 ? 'late' : 'present';
   },
@@ -131,29 +111,23 @@ const STUDENT_PROFILE = {
 };
 
 /**
+ * Disable with `localStorage['smartattend:no-demo-history'] = '1'`.
  * @returns {{seeded: boolean, count?: number}}
- *
- * Demo scaffolding. Skipped once any real attendance exists, and can be turned
- * off entirely with `localStorage['smartattend:no-demo-history'] = '1'` before
- * first launch (e.g. for a real pilot device).
  */
 export async function seedDemoHistory(today = new Date()) {
   try {
     if (globalThis.localStorage?.getItem('smartattend:no-demo-history') === '1') {
       return { seeded: false };
     }
-  } catch { /* localStorage unavailable — proceed */ }
+  } catch { /* no localStorage */ }
 
   const already = await db.attendanceEvents.count();
   if (already > 0) return { seeded: false };
 
   const todayISO = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
-  // start on the Monday HISTORY_WEEKS ago
   const g = today.getDay();
   const monday = isoAddDays(todayISO, -(g === 0 ? 6 : g - 1) - HISTORY_WEEKS * 7);
 
-  // school days from `monday` up to (not including) today. The +7 headroom lets
-  // the loop actually reach yesterday; the `>= todayISO` check is the real bound.
   const schoolDays = [];
   for (let day = 0; day < (HISTORY_WEEKS + 1) * 7; day += 1) {
     const date = isoAddDays(monday, day);
@@ -179,7 +153,7 @@ export async function seedDemoHistory(today = new Date()) {
         status,
         captureMethod: 'import',
         recordedBy: null,
-        syncedAt: now, // historical import — already reconciled, keeps it out of the sync badge
+        syncedAt: now,
         createdAt: now,
       });
     });
@@ -189,31 +163,16 @@ export async function seedDemoHistory(today = new Date()) {
   return { seeded: true, count: rows.length };
 }
 
-// --------------------------------------------------------------------------- //
-// Sample history for a REAL class                                             //
-//                                                                             //
-// seedDemoHistory() above only ever touches the fixed Form 3 B demo roster.   //
-// This is the same generator made to work on any class's real students - the //
-// "Generate sample month" action in RosterManager, for demoing the risk model //
-// (lib/riskModel.js) and the admin dashboard against an admin's own roster    //
-// rather than the canned demo one. Unlike seedDemoHistory, generated events   //
-// ARE queued for sync (syncedAt: null + a syncQueue row) - the whole point of //
-// this button is to show up in both the teacher's own screens AND the admin  //
-// overview, which reads from the server.                                     //
-// --------------------------------------------------------------------------- //
+// Sample history for a real class. Unlike the demo history, these rows are synced.
 
-// Weighted so most students stay green, but every class gets a believable
-// handful of amber/red cases to demonstrate the risk model.
+// Mostly green, with a few amber and red students.
 const SAMPLE_PROFILE_POOL = ['steady', 'steady', 'steady', 'latecomer', 'wobbling', 'declining'];
 function profileForStudent(studentId) {
   return SAMPLE_PROFILE_POOL[hashStr(studentId) % SAMPLE_PROFILE_POOL.length];
 }
 
 /**
- * Generate `weeks` weeks of plausible attendance history for every active
- * student in a class. Refuses to run if the class already has any attendance
- * history, local or otherwise - this is a bootstrapping aid for a brand-new
- * class, not a way to backfill or overwrite real records.
+ * Generate sample history for a class that has none yet.
  *
  * @returns {Promise<{seeded: boolean, reason?: string, count?: number, studentCount?: number}>}
  */
@@ -248,9 +207,7 @@ export async function generateSampleHistory(classGroupId, { weeks = 4, today = n
     schoolDays.forEach((date, idx) => {
       const rand = mulberry32(hashStr(`${student.studentId}:${date}`))();
       const status = profile({ rand, fromEnd: total - idx });
-      // Must be a real UUID - server/src/schemas/attendanceSync.schema.js
-      // rejects the whole sync batch otherwise (these rows ARE synced, unlike
-      // seedDemoHistory's, so they have to satisfy the same schema real ones do).
+      // The sync schema requires a UUID.
       const eventId = newId();
       eventRows.push({
         eventId, studentId: student.studentId, date, status,

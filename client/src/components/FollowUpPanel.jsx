@@ -17,7 +17,6 @@ function fmtWhen(iso) {
     ' · ' + dt.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit' });
 }
 
-/** Guardian phone/email, shown as tap-to-call/email links, editable inline. */
 function GuardianContact({ studentId, phone, email, onUpdated }) {
   const [editing, setEditing] = useState(false);
   const [phoneInput, setPhoneInput] = useState(phone ?? '');
@@ -77,10 +76,7 @@ function GuardianContact({ studentId, phone, email, onUpdated }) {
   );
 }
 
-/**
- * Guardian contact + log-a-follow-up form for one flagged student. Embedded
- * in StudentProfile and reused from the admin flagged-students view.
- */
+/** Guardian contact and follow-up form for one flagged student. */
 export default function FollowUpPanel({ studentId, flag, student, onStudentUpdated }) {
   const { user } = useAuth();
   const [history, setHistory] = useState([]);

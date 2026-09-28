@@ -1,13 +1,7 @@
 import { navItems } from './BottomNav';
 import { CapIcon } from './icons';
 
-/**
- * Desktop (>=768px) replacement for BottomNav - a persistent left rail
- * instead of a thumb-reach bar, since a laptop has no thumb to reach with and
- * plenty of vertical space to spend on always-visible navigation. Same
- * `active`/`onChange` contract as BottomNav so App.jsx's tab-switching logic
- * does not need to know which one is rendering.
- */
+/** Desktop (>=768px) left rail. Same props as BottomNav. */
 export default function SideNav({ active, onChange, alertCount = 0, role, classLabel, onSwitchClass, onManageRoster }) {
   return (
     <nav className="side-nav" aria-label="Primary">

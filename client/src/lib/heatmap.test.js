@@ -9,7 +9,7 @@ describe('startOfWeek', () => {
 });
 
 describe('schoolWeek', () => {
-  it('is the five weekdays Mon–Fri', () => {
+  it('is the five weekdays Mon-Fri', () => {
     const days = schoolWeek('2026-09-07');
     expect(days.map((d) => d.date)).toEqual([
       '2026-09-07', '2026-09-08', '2026-09-09', '2026-09-10', '2026-09-11',
@@ -29,7 +29,7 @@ describe('buildWeeklyHeatmap', () => {
       { studentId: 's1', date: '2026-09-07', status: 'present' },
       { studentId: 's1', date: '2026-09-08', status: 'late' },
       { studentId: 's1', date: '2026-09-09', status: 'absent' },
-      // s1 09-10 missing ⇒ absent; 09-11 is "today" and unmarked ⇒ not graded
+      // s1 09-10 missing means absent; 09-11 is today and unmarked, so not graded
     ];
     const { rows, classAverage } = buildWeeklyHeatmap(students, records, '2026-09-07', '2026-09-11');
     const s1 = rows.find((r) => r.student.studentId === 's1');

@@ -3,10 +3,6 @@ import { getClasses, getStudentsByClass, classLabel } from '../db/database';
 import { useAuth } from '../auth/AuthContext';
 import CreateClassForm from './CreateClassForm';
 
-/**
- * Bottom sheet from the top-bar class title: switch the active class, create a
- * new one, or jump to the roster editor for the current class.
- */
 export default function ClassSwitcher({ activeClassId, onPick, onManageRoster, onClose }) {
   const { user } = useAuth();
   const [classes, setClasses] = useState([]);

@@ -41,14 +41,11 @@ export default function AttendanceForm({ classGroupId, pending = 0, onRecordsCha
 
   useEffect(() => { load(); }, [load]);
 
-  // The status a row currently shows: an unsaved edit if there is one, else the
-  // saved value.
   const valueFor = useCallback(
     (studentId) => (studentId in draft ? draft[studentId] : recorded[studentId]),
     [draft, recorded],
   );
 
-  // Rows whose shown status differs from what's saved - these get written on submit.
   const dirty = useMemo(
     () => students.filter((s) => s.studentId in draft && draft[s.studentId] !== recorded[s.studentId]),
     [students, draft, recorded],
@@ -69,7 +66,7 @@ export default function AttendanceForm({ classGroupId, pending = 0, onRecordsCha
       const next = { ...prev };
       const saved = recorded[studentId];
       if (valueForRaw(prev, studentId) === status) {
-        // tapping the shown status again cancels the pending change
+        // tapping the same status again cancels the change
         if (saved === undefined) delete next[studentId];
         else next[studentId] = saved;
       } else {
@@ -182,7 +179,7 @@ export default function AttendanceForm({ classGroupId, pending = 0, onRecordsCha
               >
                 <span className="roll-row__name">{student.fullName}</span>
                 <span className="roll-row__id">
-                  ID: {student.admissionNo || '—'}
+                  ID: {student.admissionNo || '-'}
                   {student.studentId in recorded ? ` · saved: ${recorded[student.studentId]}` : ''}
                 </span>
               </button>

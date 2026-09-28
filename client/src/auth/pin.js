@@ -2,21 +2,15 @@ import bcrypt from 'bcryptjs';
 import { db } from '../db/database';
 
 /**
- * Offline PIN fallback (US-11).
- *
- * A teacher's Cognito JWT expires after an hour. In a school with no network
- * they cannot refresh it, so a locally verified PIN unlocks the app for the
- * rest of the day. The PIN is only ever stored as a bcrypt hash, and it is
- * only enrolled after a successful online Cognito login - it can never be the
- * first credential the device has seen.
+ * Offline PIN unlock for when the Cognito token has expired and there is no
+ * network. The PIN is stored only as a bcrypt hash.
  */
 
 export const PIN_LENGTH = 4;
 export const MAX_ATTEMPTS = 3;
 export const LOCKOUT_MS = 15 * 60 * 1000;
 
-// 10 rounds: ~100ms on the low-end Android devices this targets. Higher costs
-// push PIN entry past the point where a teacher would tolerate it at the gate.
+// About 100ms on low-end Android phones.
 const SALT_ROUNDS = 10;
 
 const TRIVIAL_PINS = new Set(['0000', '1111', '2222', '3333', '4444', '5555',
@@ -41,7 +35,7 @@ export function validatePinFormat(pin) {
   return true;
 }
 
-/** Enrol or replace a teacher's offline PIN. Call only after an online login. */
+/** Call only after an online login. */
 export async function setPin(username, pin) {
   validatePinFormat(pin);
   const pinHash = await bcrypt.hash(pin, SALT_ROUNDS);
@@ -81,10 +75,7 @@ export async function getPinStatus(username, now = Date.now()) {
 }
 
 /**
- * Verify a PIN, counting failures towards a lockout.
- *
- * Attempt counters live in IndexedDB, not memory, so reloading the page or
- * force-quitting the browser does not hand an attacker a fresh set of guesses.
+ * Verify a PIN. Failed attempts are stored in IndexedDB so a reload does not reset them.
  *
  * @throws {PinError} NOT_ENROLLED | LOCKED | WRONG_PIN
  */
@@ -99,7 +90,6 @@ export async function verifyPin(username, pin, now = Date.now()) {
     });
   }
 
-  // Lockout has expired - clear it before this attempt is judged.
   if (cred.lockedUntil != null) {
     await db.pinCredentials.update(cred.id, { failedAttempts: 0, lockedUntil: null });
     cred.failedAttempts = 0;
@@ -124,7 +114,7 @@ export async function verifyPin(username, pin, now = Date.now()) {
   return { username, verifiedAt: new Date(now).toISOString() };
 }
 
-/** Called after a successful online login, which supersedes any offline lockout. */
+/** Clears any lockout after an online login. */
 export async function clearLockout(username) {
   const cred = await db.pinCredentials.where('username').equals(username).first();
   if (cred) await db.pinCredentials.update(cred.id, { failedAttempts: 0, lockedUntil: null });

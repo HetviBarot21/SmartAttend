@@ -6,12 +6,7 @@ import TopBar from './TopBar';
 
 const RISK_LABEL = { red: 'RED', amber: 'AMBER' };
 
-/**
- * Read-only drill-down into one class, reached from AdminOverview's class
- * table - what the owning teacher's roster looks like from the school
- * admin's side, plus that class's slice of the school-wide flagged list so
- * the admin doesn't have to cross-reference two screens.
- */
+/** Read-only view of one class and its flagged students, for admins. */
 export default function AdminClassDetail({ classGroupId, onBack }) {
   const { user } = useAuth();
   const [data, setData] = useState(null);
@@ -56,7 +51,7 @@ export default function AdminClassDetail({ classGroupId, onBack }) {
                     <Avatar name={s.fullName} size="sm" />
                     <div className="roll-row__who" style={{ cursor: 'default' }}>
                       <span className="roll-row__name">{s.fullName}</span>
-                      <span className="roll-row__id">Adm {s.admissionNo || '—'}</span>
+                      <span className="roll-row__id">Adm {s.admissionNo || '-'}</span>
                     </div>
                     {flag && (
                       <span className={`pill pill--risk-${flag.flag === 'red' ? 'red' : 'amber'}`}>

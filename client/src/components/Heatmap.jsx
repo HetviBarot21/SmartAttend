@@ -106,7 +106,7 @@ export default function Heatmap({ classGroupId }) {
                       </td>
                     ))}
                     <td className={rate != null && rate < LOW_RATE ? 'rate--low' : undefined}>
-                      {rate == null ? '—' : `${Math.round(rate * 100)}%`}
+                      {rate == null ? '-' : `${Math.round(rate * 100)}%`}
                     </td>
                   </tr>
                 ))}
@@ -122,7 +122,7 @@ export default function Heatmap({ classGroupId }) {
         <div className="bigstat">
           <span className="bigstat__label">Weekly average</span>
           <span className={`bigstat__value${classAverage != null && classAverage < LOW_RATE ? ' rate--low' : ''}`}>
-            {classAverage == null ? '—' : `${(classAverage * 100).toFixed(1)}%`}
+            {classAverage == null ? '-' : `${(classAverage * 100).toFixed(1)}%`}
           </span>
         </div>
         <div className="bar">

@@ -10,7 +10,7 @@ venv/
 ml/models/*.pkl
 ml/data/*.csv
 
-# Colab export - duplicates ml/training + the xlsx data, not worth tracking
+# Colab export
 colab/
 .DS_Store
 dist/
@@ -21,7 +21,7 @@ server/data/
 *.db-shm
 *.db-wal
 
-# Large ML training data (raw xlsx) - kept out of git
+# Raw ML training data
 SCH-*.xlsx
 
 # Claude Code worktrees / job scratch

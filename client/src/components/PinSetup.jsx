@@ -4,11 +4,8 @@ import { PIN_LENGTH } from '../auth/pin';
 import { CapIcon } from './icons';
 
 /**
- * Offered once, immediately after the first successful online sign-in on a
- * device - the only moment we can be sure the teacher is who they claim to be
- * before the network disappears. Also reachable any time afterwards from the
- * account sheet (pass `changing` when a PIN already exists, and a `skipLabel`
- * such as "Cancel" for that entry point).
+ * Shown after the first online sign-in, and from the account sheet (with
+ * `changing` and a `skipLabel`).
  */
 export default function PinSetup({ onDone, onSkip, changing = false, skipLabel = 'Not now' }) {
   const { enrolPin } = useAuth();

@@ -1,11 +1,6 @@
 import TopBar from './TopBar';
 
-/**
- * Printable RFID card list: student name, admission number and the issued card
- * number, one row each. The teacher prints this and the numbers are encoded /
- * printed onto the physical cards. Everything outside `.cardlist-sheet` is
- * hidden by the print stylesheet.
- */
+/** Printable RFID card list. The print stylesheet hides everything outside `.cardlist-sheet`. */
 export default function CardList({ students, className, onClose }) {
   const rows = [...students].sort((a, b) => a.fullName.localeCompare(b.fullName));
   const issued = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
@@ -49,8 +44,8 @@ export default function CardList({ students, className, onClose }) {
                 <tr key={s.studentId}>
                   <td>{i + 1}</td>
                   <td>{s.fullName}</td>
-                  <td>{s.admissionNo || '—'}</td>
-                  <td className="cardlist-table__uid">{s.cardUid || '—'}</td>
+                  <td>{s.admissionNo || '-'}</td>
+                  <td className="cardlist-table__uid">{s.cardUid || '-'}</td>
                 </tr>
               ))}
             </tbody>

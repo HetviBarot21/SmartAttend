@@ -1,6 +1,6 @@
 // CLI: create the database file and apply the schema.
-//   node src/db/init.js            - create if missing, otherwise leave as-is
-//   node src/db/init.js --reset    - delete the file first, then recreate
+//   node src/db/init.js            create if missing
+//   node src/db/init.js --reset    delete and recreate
 import { existsSync, rmSync } from 'node:fs';
 import { openDatabase } from './index.js';
 import { config } from '../config.js';

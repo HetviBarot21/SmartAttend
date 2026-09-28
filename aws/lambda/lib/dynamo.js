@@ -1,23 +1,8 @@
 'use strict';
 
 /**
- * DynamoDB DocumentClient factory shared by the Lambda handlers.
- *
- * ---------------------------------------------------------------------------
- * LOCAL MODE (default while AWS_ACCESS_KEY_ID is unset or "placeholder"):
- *   Targets DynamoDB Local. Start it with:
- *       docker run -p 8000:8000 amazon/dynamodb-local
- *   and create the tables (see aws/README.md for the CreateTable commands).
- *
- * SWITCHING TO REAL AWS when credentials arrive:
- *   1. Give the Lambda an execution role with DynamoDB + SES permissions and
- *      DELETE AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY from its environment
- *      (the SDK then uses the role automatically). If you must use static keys,
- *      set them to the real values instead of "placeholder".
- *   2. Remove the DYNAMODB_ENDPOINT variable so the SDK resolves the real
- *      regional endpoint.
- *   Nothing else in the handlers changes.
- * ---------------------------------------------------------------------------
+ * DynamoDB DocumentClient shared by the Lambda handlers. Uses DynamoDB Local
+ * while AWS_ACCESS_KEY_ID is unset or "placeholder". See aws/README.md.
  */
 
 const { DynamoDBClient } = require('@aws-sdk/client-dynamodb');

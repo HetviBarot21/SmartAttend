@@ -20,7 +20,6 @@ const RISK_TAKEAWAY = {
 };
 const INITIAL_HISTORY = 8;
 
-/** Plain-language read on the attendance_trend feature (rate_w1 - rate_w2). */
 function trendLabel(trend) {
   if (trend == null) return null;
   if (trend <= -0.1) return 'Getting worse';
@@ -37,7 +36,6 @@ function fmtDate(iso) {
   };
 }
 
-/** Tiny inline line chart for the 6-week trend. */
 function TrendChart({ points }) {
   const w = 300;
   const h = 120;
@@ -72,7 +70,6 @@ function TrendChart({ points }) {
   );
 }
 
-/** Full-screen page shell so the profile is a proper page, not an inline panel. */
 function ProfilePage({ title, onBack, children }) {
   return (
     <div className="app">
@@ -123,7 +120,7 @@ export default function StudentProfile({ studentId, className, onBack }) {
   if (!student) return <ProfilePage title="Profile" onBack={onBack}><p className="empty">Student not found.</p></ProfilePage>;
 
   const { risk, trend, insights, features, assessable } = model;
-  const enrolled = student.enrolledAt ? fmtDate(student.enrolledAt).long : '—';
+  const enrolled = student.enrolledAt ? fmtDate(student.enrolledAt).long : '-';
   const recent = [...history].reverse();
   const shown = showAll ? recent : recent.slice(0, INITIAL_HISTORY);
 
@@ -136,7 +133,7 @@ export default function StudentProfile({ studentId, className, onBack }) {
           <Avatar name={student.fullName} size="lg" className="avatar--on-hero" />
           <div className="profile-hero-card__id">
             <div className="profile-hero-card__name">{student.fullName}</div>
-            <div className="profile-hero-card__meta">{className} · Adm {student.admissionNo || '—'}</div>
+            <div className="profile-hero-card__meta">{className} · Adm {student.admissionNo || '-'}</div>
             <div className="profile-hero-card__meta profile-hero-card__meta--sub">
               {student.cardUid ? `Card ${student.cardUid}` : 'No card issued'} · Since {enrolled}
             </div>

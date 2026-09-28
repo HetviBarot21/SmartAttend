@@ -95,8 +95,7 @@ describe('createCardHandler - simulated scans write to SQLite', () => {
   test('fingerprint challenge fires on roughly 1 in 4 scans', () => {
     const handle = createCardHandler({ db, challengeRate: 0.25, successRate: 1 });
     const n = 600;
-    // Alternating two students so ~half are fresh writes and ~half duplicates;
-    // every *challenged* scan logs a fingerprint_challenges row regardless.
+    // Every challenged scan logs a fingerprint_challenges row, duplicate or not.
     for (let i = 0; i < n; i++) handle({ cardUid: i % 2 ? CARD : CARD_2 });
 
     const challenges = db.prepare('SELECT COUNT(*) n FROM fingerprint_challenges').get().n;

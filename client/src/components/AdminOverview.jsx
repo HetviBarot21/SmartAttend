@@ -9,14 +9,7 @@ const METHOD_LABEL = {
   parent_call: 'Called parent/guardian', sms: 'Sent SMS', home_visit: 'Home visit', meeting: 'Met at school', other: 'Other',
 };
 
-/**
- * The central-admin landing screen: every class in the school, who teaches
- * it, and every flagged student school-wide with a "log a follow-up" action -
- * the cross-class counterpart of a single teacher's Alerts tab. Reads live
- * from server/src/routes/admin.js (services/adminService.js), not Dexie -
- * this is deliberately "what has every teacher's device pushed to the
- * server," not this device's own local data.
- */
+/** School admin home: every class and every flagged student, read live from the server. */
 export default function AdminOverview({ onOpenClass }) {
   const { user } = useAuth();
   const schoolId = user?.schoolId;
@@ -94,7 +87,7 @@ export default function AdminOverview({ onOpenClass }) {
         </div>
         <div className="stat-card">
           <div className="stat-card__value">
-            {overview.attendanceRateToday != null ? `${Math.round(overview.attendanceRateToday * 100)}%` : '—'}
+            {overview.attendanceRateToday != null ? `${Math.round(overview.attendanceRateToday * 100)}%` : '-'}
           </div>
           <div className="stat-card__label">Attendance today</div>
         </div>

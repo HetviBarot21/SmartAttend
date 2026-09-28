@@ -1,58 +1,47 @@
 """Feature engineering for the SmartAttend AI persistent-absenteeism model.
 
-Target model: a classifier that predicts **persistent absenteeism** - a
-student missing >= 30% of scheduled school days inside a rolling four-week
-window (label built in :mod:`compute_labels`).
+Persistent absenteeism means missing >= 30% of scheduled school days in a
+rolling four-week window (see :mod:`compute_labels`).
 
-This module turns raw attendance events into the **eleven-feature** vector the
-classifier consumes (see :data:`FEATURE_NAMES`). Every calculation runs on the
-*school-day axis* from the Kenya school term calendar (``kenya_calendar.json``):
-weekends, public holidays and any day outside a term are not scheduled school
-days and are never counted. A dated attendance record that does not land on a
-scheduled school day is ignored outright.
+Features count only scheduled school days from ``kenya_calendar.json``.
+Records on any other day are ignored.
 
 All features are computed for a reference date ``as_of`` using **only records
 strictly before ``as_of``**:
 
-1. ``attendance_rate_w1`` - attendance rate in the most recent two-week window
+1. ``attendance_rate_w1``: attendance rate in the most recent two-week window
    ``[as_of - 14d, as_of)``.
-2. ``attendance_rate_w2`` - attendance rate in the two-week window before that.
-3. ``attendance_rate_w3`` - attendance rate in the two-week window before that.
-4. ``longest_absence_streak`` - longest run of consecutive scheduled school days
+2. ``attendance_rate_w2``: attendance rate in the two-week window before that.
+3. ``attendance_rate_w3``: attendance rate in the two-week window before that.
+4. ``longest_absence_streak``: longest run of consecutive scheduled school days
    marked/left absent, within the current four-week window ``[as_of - 28d, as_of)``.
-5. ``absence_episode_count`` - number of separate absence episodes (maximal runs
+5. ``absence_episode_count``: number of separate absence episodes (maximal runs
    of >= 1 absent school day) in the current four-week window.
-6. ``dow_concentration`` - absences on the single most common absence weekday
+6. ``dow_concentration``: absences on the single most common absence weekday
    divided by total absences, within the current four-week window. 0.0 when
    there are no absences.
-7. ``attendance_trend`` - ``attendance_rate_w1 - attendance_rate_w2`` (signed;
+7. ``attendance_trend``: ``attendance_rate_w1 - attendance_rate_w2`` (signed;
    positive = improving, negative = worsening).
-8. ``fee_absence_rate`` - fraction of the current four-week window's absences
+8. ``fee_absence_rate``: fraction of the current four-week window's absences
    whose recorded reason is fee/money-related (fee arrears, no bus fare, sent
    home for fees, ...). Needs ``reasons``; 0.0 when there are no absences or no
    reason data.
-9. ``health_absence_rate`` - fraction of the current four-week window's
+9. ``health_absence_rate``: fraction of the current four-week window's
    absences whose recorded reason is health-related (illness, fever, clinic
    visit, ...). Same fallback as above.
-10. ``attendance_rate_term`` - attendance rate since the start of the term
+10. ``attendance_rate_term``: attendance rate since the start of the term
     containing ``as_of``, up to ``as_of``. Captures a longer, term-scoped
     baseline the 2-week windows can't see. ``nan`` without ``term_bounds`` or
     when ``as_of`` falls outside any term (a holiday).
-11. ``days_into_term`` - scheduled school days from the start of that term up
+11. ``days_into_term``: scheduled school days from the start of that term up
     to ``as_of``. Low values flag a student still in the settling-in period at
     a new term. ``nan`` under the same conditions as above.
 
 "Attendance" means a ``present`` or ``late`` record. A scheduled school day with
-no record counts as an absence - a completed historical window is expected to be
-fully recorded, and a genuine gap is treated conservatively for risk scoring.
-An attendance rate is ``nan`` only when the window contains no scheduled school
-days at all (e.g. it falls entirely in a holiday break).
+no record counts as an absence. A rate is ``nan`` only when its window has no
+scheduled school days.
 
-``reasons`` and ``term_bounds`` are optional everywhere: omit them (the
-default) and features 8-11 come back ``nan``, imputed the same way a
-holiday-only rate window already is. This is what keeps the plain
-``compute_features(records, as_of)`` call every existing test and the JS ports
-use working unchanged.
+Without ``reasons`` and ``term_bounds``, features 8-11 are ``nan``.
 """
 
 from __future__ import annotations
@@ -66,9 +55,7 @@ from typing import Iterable, Mapping, Sequence
 import numpy as np
 import pandas as pd
 
-# --------------------------------------------------------------------------- #
-# Status vocabulary - matches client/src/db/database.js ATTENDANCE_STATUSES    #
-# --------------------------------------------------------------------------- #
+# Matches ATTENDANCE_STATUSES in client/src/db/database.js.
 
 PRESENT_STATUSES = frozenset({"present", "late"})
 ABSENT_STATUSES = frozenset({"absent"})
@@ -76,7 +63,6 @@ ABSENT_STATUSES = frozenset({"absent"})
 TWO_WEEKS = dt.timedelta(days=14)
 FOUR_WEEKS = dt.timedelta(days=28)
 
-#: Absence fraction at or above which a four-week window is "persistent absenteeism".
 PERSISTENT_ABSENCE_THRESHOLD = 0.30
 
 FEATURE_NAMES: tuple[str, ...] = (
@@ -93,17 +79,7 @@ FEATURE_NAMES: tuple[str, ...] = (
     "days_into_term",
 )
 
-# --------------------------------------------------------------------------- #
-# Absence-reason categorisation                                               #
-#                                                                              #
-# The raw `reason_note` free text (SCH-01/02 "Absence Reasons" sheet) uses a   #
-# fixed vocabulary of ~20 phrases - not truly free text - so a keyword lookup  #
-# is enough; no NLP needed. Two buckets are kept as features because they      #
-# plausibly call for different follow-ups (a fee reminder vs a health check),  #
-# which is the whole point of surfacing them to a teacher. Everything else     #
-# (bereavement, transport, farm work, "unknown", missing) falls through        #
-# uncounted rather than diluting either bucket.                                #
-# --------------------------------------------------------------------------- #
+# Absence reasons come from a small fixed vocabulary, so keywords are enough.
 
 _FEE_REASON_KEYWORDS = (
     "fee", "fees", "bus fare", "no bus", "transport",
@@ -114,7 +90,7 @@ _HEALTH_REASON_KEYWORDS = (
 
 
 def categorize_reason(note) -> str | None:
-    """One of 'fee', 'health', or None (anything else / missing / unrecognised)."""
+    """One of 'fee', 'health', or None."""
     if note is None or (isinstance(note, float) and np.isnan(note)):
         return None
     text = str(note).strip().lower()
@@ -125,10 +101,6 @@ def categorize_reason(note) -> str | None:
     if any(kw in text for kw in _HEALTH_REASON_KEYWORDS):
         return "health"
     return None
-
-# --------------------------------------------------------------------------- #
-# School calendar                                                             #
-# --------------------------------------------------------------------------- #
 
 
 def _as_date(value) -> dt.date:
@@ -144,9 +116,7 @@ def _as_date(value) -> dt.date:
 
 
 class SchoolCalendar:
-    """Ordered set of scheduled school days derived from terms, weekends and
-    public holidays. The day list is materialised once and queries are O(log n)
-    or O(1)."""
+    """Scheduled school days derived from terms, weekends and public holidays."""
 
     def __init__(
         self,
@@ -164,7 +134,7 @@ class SchoolCalendar:
                 parsed_terms.append(
                     (term.get("name", "term"), _as_date(term["start"]), _as_date(term["end"]))
                 )
-            else:  # (name, start, end) or (start, end)
+            else:
                 if len(term) == 3:
                     parsed_terms.append((term[0], _as_date(term[1]), _as_date(term[2])))
                 else:
@@ -178,8 +148,6 @@ class SchoolCalendar:
 
         self._days: tuple[dt.date, ...] = self._materialise()
         self._day_set = frozenset(self._days)
-
-    # -- construction ---------------------------------------------------------
 
     def _materialise(self) -> tuple[dt.date, ...]:
         out: list[dt.date] = []
@@ -213,8 +181,6 @@ class SchoolCalendar:
             name=data.get("name", "calendar"),
         )
 
-    # -- queries ------------------------------------------------------------
-
     def __len__(self) -> int:
         return len(self._days)
 
@@ -241,13 +207,9 @@ class SchoolCalendar:
         return self._days
 
 
-# Default calendar: loaded from the JSON that ships next to this module.
 _CALENDAR_PATH = Path(__file__).with_name("kenya_calendar.json")
 KENYA_SCHOOL_CALENDAR = SchoolCalendar.from_json(_CALENDAR_PATH)
 
-# --------------------------------------------------------------------------- #
-# Record normalisation                                                        #
-# --------------------------------------------------------------------------- #
 
 _STUDENT_KEYS = ("student_id", "studentId", "studentID", "student")
 _DATE_KEYS = ("date", "day", "attendance_date")
@@ -284,11 +246,6 @@ def normalise_records(
         if day not in chosen or tiebreak >= chosen[day][1]:
             chosen[day] = (status, tiebreak)
     return {day: status for day, (status, _) in chosen.items()}
-
-
-# --------------------------------------------------------------------------- #
-# Window helpers                                                              #
-# --------------------------------------------------------------------------- #
 
 
 def _resolve_window(
@@ -368,10 +325,7 @@ def reason_absence_rate(
 ) -> float:
     """Fraction of ``window``'s absences whose reason categorises as ``category``.
 
-    0.0 when there are no absences in the window, or no reason data at all -
-    same "nothing to see here" convention as :func:`dow_concentration`, not
-    ``nan``, since an absence with an uncategorised reason is a real, known
-    zero contribution to this bucket rather than a missing measurement.
+    0.0 when there are no absences or no reason data.
     """
     absences = [day for day, attended in window if not attended]
     if not absences:
@@ -393,11 +347,6 @@ def _term_containing(
     return None
 
 
-# --------------------------------------------------------------------------- #
-# Public API                                                                  #
-# --------------------------------------------------------------------------- #
-
-
 def compute_features(
     records: Iterable[Mapping],
     as_of,
@@ -407,8 +356,7 @@ def compute_features(
 ) -> dict[str, float]:
     """Eleven-feature vector for one student at reference date ``as_of``.
 
-    Only records with ``date < as_of`` are used - no future or same-day
-    information leaks into the features.
+    Only records with ``date < as_of`` are used.
 
     Parameters
     ----------

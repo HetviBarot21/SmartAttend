@@ -7,13 +7,7 @@ import CreateClassForm from './CreateClassForm';
 import Avatar from './Avatar';
 import { CapIcon } from './icons';
 
-/**
- * First-run setup, shown when the device has no classes yet. Two steps:
- *   1. create the class
- *   2. enrol its students (name + admission no); each gets an RFID card number
- *      issued automatically, ready to print onto a physical card.
- * A "load a sample class" shortcut seeds the Form 3 B demo instead.
- */
+/** First-run setup: create a class, then enrol its students. */
 export default function SetupWizard({ onDone }) {
   const [cls, setCls] = useState(null);
   const [students, setStudents] = useState([]);
@@ -64,7 +58,7 @@ export default function SetupWizard({ onDone }) {
     }
   }
 
-  // -- step 1 : create the class -------------------------------------------- //
+  // Step 1: create the class
   if (!cls) {
     return (
       <div className="auth">
@@ -85,7 +79,7 @@ export default function SetupWizard({ onDone }) {
     );
   }
 
-  // -- step 2 : add students ---------------------------------------------- //
+  // Step 2: add students
   return (
     <div className="auth">
       <div className="auth__card auth__card--wide">
@@ -128,7 +122,7 @@ An RFID card number is issued automatically. Print cards from the roster later.
                 <div className="roll-row__who" style={{ cursor: 'default' }}>
                   <span className="roll-row__name">{s.fullName}</span>
                   <span className="roll-row__id">
-                    Adm {s.admissionNo || '—'} · card <b>{s.cardUid}</b>
+                    Adm {s.admissionNo || '-'} · card <b>{s.cardUid}</b>
                   </span>
                 </div>
                 <button

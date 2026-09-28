@@ -88,7 +88,7 @@ function TeacherApp() {
     bump();
   }, [bump]);
 
-  // ----- gates that replace the whole screen ----------------------------- //
+  // Full-screen gates
 
   if (classes === null) return <div className="centered">Loading classes…</div>;
 
@@ -214,8 +214,7 @@ function AuthGate() {
   if (status === AUTH_STATUS.SIGNED_OUT) return <LoginScreen />;
   if (status === AUTH_STATUS.LOCKED) return <PinUnlock />;
 
-  // System admin has no class of their own and isn't a field/offline role,
-  // so it skips both the PIN gate below and TeacherApp's class-setup gate.
+  // System admins skip the PIN and class-setup gates.
   if (user?.role === 'system_admin') return <SystemAdminOverview />;
 
   if (!pinState.enrolled && !pinSetupSkipped) {

@@ -1,9 +1,8 @@
 'use strict';
 
 /**
- * JSON Schema (draft 2020-12) for the sync batch API Gateway forwards to
- * syncHandler.js. Mirror of server/src/schemas/attendanceSync.schema.js - kept
- * as a separate copy so this Lambda deploys as a self-contained bundle.
+ * Copy of server/src/schemas/attendanceSync.schema.js so the Lambda deploys on
+ * its own. Keep the two in step.
  */
 
 const attendanceRecordSchema = {

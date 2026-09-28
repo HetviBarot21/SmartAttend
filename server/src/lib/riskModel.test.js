@@ -24,17 +24,12 @@ function schoolDayRows(asOf, { count, status, endGapDays = 0 }) {
   return rows;
 }
 
-const ASOF = '2026-03-16'; // a Monday, inside Term 1 2026 (2026-01-05..2026-04-03)
+const ASOF = '2026-03-16'; // a Monday in Term 1 2026
 const TERM_1_START = '2026-01-05';
 
 /**
- * Every school day from `TERM_1_START` up to (not including) `asOf`, using
- * `patternFor(dateISO, index, total)` for each. Needed because
- * attendance_rate_term / days_into_term look back to the start of the term,
- * not just the ~28-day windows the older rule-based scorer used - a fixture
- * that only covers the last N days looks like "absent the rest of the term"
- * to those two features (a school day with no record = absent), which would
- * silently misrepresent what these tests are actually trying to describe.
+ * A status for every school day from the start of term to `asOf`. Term
+ * features count missing days as absences, so fixtures must cover the whole term.
  */
 function termRows(asOf, patternFor) {
   const rows = [];
@@ -68,16 +63,8 @@ describe('assessStudent', () => {
   });
 
   test('perfect attendance stays well clear of red, even though the trained model floors around amber', () => {
-    // The trained model's probabilities cluster tightly (~0.31-0.34) for
-    // anything from perfect attendance to occasional scattered absences,
-    // then jump sharply once absence gets more frequent (see the ~0.57
-    // result for a 1-in-5 pattern in the amber test below). That floor
-    // sitting just above this scorer's amber cutoff is a real, verified
-    // property of the current model (tuned to optimise recall, i.e. lean
-    // toward flagging when unsure) - not a porting bug. Documented rather
-    // than silently threshold-tuned around: a real UX tradeoff to revisit
-    // if false-amber flags on clearly-fine students turn out to bother
-    // teachers in practice.
+    // The model scores even perfect attendance around 0.31-0.34, just above
+    // the amber cutoff, because its threshold was tuned for recall.
     const rows = termRows(ASOF, () => 'present');
     const result = assessStudent(rows, ASOF);
     assert.notEqual(result.flag, 'red');
@@ -85,8 +72,6 @@ describe('assessStudent', () => {
   });
 
   test('red for a student on a long consecutive absence streak', () => {
-    // Chain the present block directly onto the absent block's earliest date
-    // (rather than guessing a calendar gap) so the two never collide on a date.
     const absentRows = schoolDayRows(ASOF, { count: 6, status: 'absent', endGapDays: 0 });
     const earliestAbsentDate = absentRows[absentRows.length - 1].date;
     const presentRows = schoolDayRows(earliestAbsentDate, { count: 20, status: 'present', endGapDays: 0 });
@@ -96,8 +81,7 @@ describe('assessStudent', () => {
   });
 
   test('amber (not red) for a mostly-present student with a few scattered absences', () => {
-    // present all term except one isolated absence every 10th school day -
-    // real signal, but nothing like the chronic pattern the red case builds.
+    // One absence every 10th school day.
     const rows = termRows(ASOF, (date, i) => (i % 10 === 0 ? 'absent' : 'present'));
     const result = assessStudent(rows, ASOF);
     assert.equal(result.flag, 'amber');

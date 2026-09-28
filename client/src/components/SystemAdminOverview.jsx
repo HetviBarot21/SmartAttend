@@ -4,15 +4,8 @@ import { useAuth } from '../auth/AuthContext';
 import TopBar from './TopBar';
 
 /**
- * Platform-wide landing screen for the system-admin role: every school on
- * the platform, with a toggle to activate/deactivate it. Sits above the
- * per-school AdminOverview - a system admin has no schoolId of their own and
- * isn't gated by class setup like TeacherApp is (see App.jsx).
- *
- * Deliberately display-only beyond the toggle: there is no identity system
- * yet enforcing who can reach this screen, and deactivating a school here
- * does not (yet) block that school's teachers/admins from signing in or
- * syncing - see server/src/db/repository.js:setSchoolStatus.
+ * System-admin home: every school, with an activate/deactivate toggle.
+ * Deactivating a school does not block its users yet.
  */
 export default function SystemAdminOverview() {
   const { signOut } = useAuth();

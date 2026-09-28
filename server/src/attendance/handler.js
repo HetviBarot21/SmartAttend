@@ -11,24 +11,12 @@ import {
 } from '../db/repository.js';
 
 /**
- * Turn an RFID `card-detected` scan into a persisted attendance record.
- *
- * Flow:
- *   1. Resolve the card UID to a student. Unknown card -> audit + stop.
- *   2. With probability `challengeRate` (default 25%), raise a fingerprint
- *      challenge:
- *        - match    -> record attendance as capture_method 'fingerprint',
- *                      verified = 1, and link the challenge to the event.
- *        - no match -> reject the scan. Nothing is written to
- *                      attendance_events; the challenge is logged with
- *                      result 'no_match' and an audit row records the rejection.
- *   3. No challenge -> record attendance as capture_method 'rfid', verified = 0.
- *   4. A second scan of the same student on the same day hits the
- *      UNIQUE(student_id, date) constraint and is reported as a duplicate.
+ * Turn an RFID scan into an attendance record. Some scans (`challengeRate`)
+ * also need a fingerprint match; a failed match rejects the scan.
  *
  * @returns {(scan: {cardUid: string, scanId?: string}) => object}
- *          a handler that returns an outcome object (never throws for the
- *          expected cases - unknown card, duplicate, rejected).
+ *          returns an outcome object instead of throwing for an unknown card,
+ *          a duplicate or a rejection.
  */
 export function createCardHandler({
   db,

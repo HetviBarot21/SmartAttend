@@ -1,9 +1,4 @@
-/**
- * Thin fetch wrappers over server/src/routes/systemAdmin.js - the
- * platform-wide school list the system-admin role reads, plus the
- * activate/deactivate action. Same same-origin/live-fetch pattern as
- * adminService.js; no offline view for this role.
- */
+/** Fetch wrappers for server/src/routes/systemAdmin.js. */
 
 async function getJson(path) {
   const res = await fetch(path);

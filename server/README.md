@@ -33,15 +33,15 @@ By default the SQLite file is **outside the repo**, at
 `%LOCALAPPDATA%\smartattend\smartattend.db` (Windows) or
 `$TMPDIR/smartattend/smartattend.db` elsewhere.
 
-This is deliberate: this project is usually checked out under `OneDrive/...`, and
-OneDrive holds file handles open to sync changes, which deadlocks SQLite's WAL
-files after the first write. If your checkout is **not** under a syncing folder
+This is deliberate. The project is usually checked out under `OneDrive/...`, and
+OneDrive holds file handles open, which deadlocks SQLite's WAL files after the
+first write. If your checkout is **not** under a syncing folder
 you can point it back into the repo with `DB_PATH=./data/smartattend.db` in a
 `.env` file (see `.env.example`).
 
 ## Configuration
 
-All optional - copy `.env.example` to `.env` to override.
+All optional. Copy `.env.example` to `.env` to override.
 
 | Variable | Default | Meaning |
 |---|---|---|
@@ -68,7 +68,7 @@ All optional - copy `.env.example` to `.env` to override.
 | GET | `/api/attendance?date=YYYY-MM-DD` | attendance records for a date (default today) |
 | GET | `/api/challenges?limit=50` | recent fingerprint challenges |
 | GET | `/api/stats?date=YYYY-MM-DD` | counts by capture method, challenge outcomes, pending sync |
-| POST | `/api/rfid/scan` | fire one scan now - body `{ "cardUid": "04A1B2C3" }` |
+| POST | `/api/rfid/scan` | fire one scan now, body `{ "cardUid": "04A1B2C3" }` |
 | POST | `/api/sync` | inbound attendance batch from the offline PWA (see below) |
 
 Valid `cardUid` values are the 10 seeded cards: `04A1B2C3`, `04D4E5F6`,
@@ -84,7 +84,7 @@ Valid `cardUid` values are the 10 seeded cards: `04A1B2C3`, `04D4E5F6`,
    - **match** -> write attendance with `capture_method = 'fingerprint'`, `verified = 1`, and link the challenge row to the event.
    - **no match** -> reject. Nothing is written to `attendance_events`; a `fingerprint_challenges` row with `result = 'no_match'` and an `attendance.rejected` audit row are the buddy-punching trail.
 3. No challenge -> write attendance with `capture_method = 'rfid'`, `verified = 0`.
-4. A second scan of the same student the same day hits `UNIQUE(student_id, date)` and is reported as a duplicate - no second row.
+4. A second scan of the same student the same day hits `UNIQUE(student_id, date)` and is reported as a duplicate. No second row is written.
 
 The attendance write, its `sync_queue` entry and the audit row share one
 transaction, so a rejected write leaves nothing behind.
@@ -93,15 +93,15 @@ transaction, so a rejected write leaves nothing behind.
 
 Two halves, both backed by `sync_queue`:
 
-**Inbound** — `POST /api/sync` (`src/routes/sync.js`). The offline PWA posts a
+**Inbound:** `POST /api/sync` (`src/routes/sync.js`). The offline PWA posts a
 batch `{ deviceId, records: [...] }`; the whole batch is validated against
 `src/schemas/attendanceSync.schema.js`. Each record is deduplicated on `eventId`
-and on `(studentId, date)` — re-sent records are reported as skipped, not errors,
+and on `(studentId, date)`. Re-sent records are reported as skipped, not errors,
 so the PWA can safely retry whole batches. Survivors land in `attendance_events`
 (`source = 'client'`) and `sync_queue`, one transaction each. Responds `200` with
 `{ received, insertedCount, skippedCount, inserted, skipped }`.
 
-**Outbound** — `src/workers/syncWorker.js`, spawned as a worker thread by
+**Outbound:** `src/workers/syncWorker.js`, spawned as a worker thread by
 `server.js` (skip it with `SYNC_WORKER_DISABLED=true`). Every
 `SYNC_POLL_INTERVAL_MS` it drains `pending` rows, POSTs them in batches to
 `SYNC_API_GATEWAY_URL` (the AWS sync Lambda), marks confirmed rows `synced` and
@@ -121,12 +121,12 @@ safe to run on every boot). Full description in `../docs/schema.md`.
 - `schools` -> `class_groups` -> `students` -> `rfid_cards`
 - `students` -> `attendance_events` -> `sync_queue` -> (`syncWorker.js`) -> AWS
 - `attendance_events` / `students` -> `fingerprint_challenges`
-- `audit_log` - standalone (action / actor / record / detail / timestamp)
+- `audit_log`: standalone (action / actor / record / detail / timestamp)
 
 ## Tests
 
 ```bash
-npm test             # node --test, 39 tests
+npm test             # node --test
 ```
 
 Covers: all 8 tables created, seed correctness, attendance write + atomicity,
@@ -138,8 +138,6 @@ student), and the sync worker's backoff / batching / cloud-response handling.
 
 ## Not built yet
 
-- Risk scoring / ML (deferred - schema keeps `attendance_events` append-only so
-  the history is there when it's needed)
 - Real Cognito-verified requests
 - Real AWS: `syncWorker.js` targets `SYNC_API_GATEWAY_URL`; until that's a
   deployed endpoint, point it at a local shim around `../aws/lambda/syncHandler.js`

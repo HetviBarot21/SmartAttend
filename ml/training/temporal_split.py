@@ -1,14 +1,10 @@
 """Time-aware data splitting for the SmartAttend AI absenteeism model.
 
-Attendance is a time series, so the train/test split and the cross-validation
-folds must respect chronology: a model is only useful if it predicts the
-*future* from the *past*. Nothing here shuffles.
+Nothing here shuffles: earlier rows always train and later rows test.
 
-- :func:`temporal_train_test_split` - earlier rows train, later rows test,
-  split at a fraction of the time span or at an explicit cutoff date.
-- :class:`ForwardChainingCV` - expanding-window ("forward chaining") cross
-  validation, drop-in for scikit-learn's ``cv=`` in ``GridSearchCV`` /
-  ``cross_val_score``. Pass the per-row dates as ``groups``.
+- :func:`temporal_train_test_split`: split at a fraction of the time span or a cutoff date.
+- :class:`ForwardChainingCV`: expanding-window cross validation for scikit-learn's
+  ``cv=``. Pass the per-row dates as ``groups``.
 """
 
 from __future__ import annotations
@@ -118,8 +114,7 @@ class ForwardChainingCV:
         ``timedelta`` or day count removed from the end of each training block,
         so a forward-looking label in training cannot overlap the test block.
     max_train_blocks
-        If set, use a sliding rather than expanding window - keep at most this
-        many trailing blocks in each training fold.
+        If set, keep at most this many trailing blocks in each training fold.
 
     Usage
     -----

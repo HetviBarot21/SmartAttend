@@ -1,58 +1,24 @@
 /**
- * Outbound attendance sync - the drain half of the Tier 1 sync loop.
- *
- * Pipeline position:
- *
- *   AttendanceForm -> addAttendanceEvent() -> Dexie `attendanceEvents` + `syncQueue`
- *                                              |
- *                                       **drainSyncQueue()**  <- this module
- *                                              |
- *                                     POST /api/sync (Tier 2)  -> AWS
- *
- * `src/db/database.js` writes every record and a matching `syncQueue` row
- * (`status: 'pending'`) in one transaction. This module reads those pending
- * rows back, joins each to its attendance record, POSTs them in batches, and
- * moves each row to `synced` or `failed` based on the server's per-record
- * answer. Failed rows carry an exponential-backoff `nextAttemptAt` so a retry
- * storm cannot hammer a struggling server.
- *
- * Layering note: the service worker also keeps a Workbox Background Sync queue
- * (src/workers/syncQueue.js). That is a transport-level net for requests that
- * were already in flight when the network dropped. THIS queue - the Dexie one -
- * is the durable source of truth the teacher sees ("N records awaiting sync").
- * The service worker calls `drainSyncQueue()` from its `sync` handler so both
- * drain together when connectivity returns.
+ * Sends pending attendance records from the Dexie `syncQueue` to POST /api/sync
+ * in batches, marking each row synced or failed (with exponential backoff).
  */
 
 import { db } from '../db/database';
 
-/** Same-origin endpoint on the Tier 2 Express server. */
 export const SYNC_ENDPOINT = '/api/sync';
 
-/** Background Sync tag the page registers and the service worker listens for. */
 export const DRAIN_SYNC_TAG = 'smartattend-drain-sync';
 
-/** Records per POST. The server schema caps a batch at 500; stay well under. */
+/** The server caps a batch at 500. */
 export const BATCH_SIZE = 100;
 
-/** Backoff floor: a first failure waits this long before the next attempt. */
-export const RETRY_BASE_MS = 60_000; // 1 minute
+export const RETRY_BASE_MS = 60_000;
+export const RETRY_MAX_MS = 30 * 60_000;
 
-/** Backoff ceiling. Matches the Tier 2 syncWorker's `min(1_800_000, ...)`. */
-export const RETRY_MAX_MS = 30 * 60_000; // 30 minutes
-
-/**
- * Skip reasons the server may report that a retry could still clear. Every
- * other reason (`duplicate_event_id`, `duplicate_student_date`,
- * `unknown_student`, `duplicate_race`) is terminal - the record is either
- * already stored or will never be accepted as-is, so we stop resending it.
- */
+/** Server skip reasons worth retrying. Every other reason is final. */
 const RETRYABLE_SKIP_REASONS = new Set(['insert_error']);
 
 /**
- * Exponential backoff for a queue row that has failed `attemptCount` times
- * (1 = it has failed once). `base * 2^(attemptCount - 1)`, capped at `max`.
- *
  * @param {number} attemptCount  failures so far, 1-based
  * @returns {number} milliseconds to wait before the next attempt
  */
@@ -61,7 +27,7 @@ export function backoffMs(attemptCount, { base = RETRY_BASE_MS, max = RETRY_MAX_
   return Math.min(max, base * 2 ** (n - 1));
 }
 
-/** Project an attendance record onto exactly the fields attendanceSync.schema.js allows. */
+/** Only the fields attendanceSync.schema.js allows. */
 function toSyncRecord(event) {
   return {
     eventId: event.eventId,
@@ -74,11 +40,7 @@ function toSyncRecord(event) {
   };
 }
 
-/**
- * Split a batch's queue rows into those the server has finished with and those
- * worth resending, using its `{ inserted: [eventId], skipped: [{eventId, reason}] }`
- * response. A row the server did not mention at all is resent, defensively.
- */
+/** Split rows into settled and retry. Rows the server did not mention are retried. */
 function classifyResponse(rows, result) {
   const inserted = new Set(result?.inserted ?? []);
   const skipReason = new Map((result?.skipped ?? []).map((s) => [s.eventId, s.reason]));
@@ -98,7 +60,6 @@ function classifyResponse(rows, result) {
   return { settled, retry };
 }
 
-/** Move rows to `synced` and stamp the matching attendance records, atomically. */
 async function markSettled(rows, atMs) {
   if (rows.length === 0) return;
   const iso = new Date(atMs).toISOString();
@@ -110,7 +71,6 @@ async function markSettled(rows, atMs) {
   });
 }
 
-/** Move rows to `failed`, bump the attempt count, and schedule the backoff. */
 async function markFailed(rows, message, atMs) {
   if (rows.length === 0) return;
   const lastError = message ? String(message).slice(0, 500) : null;
@@ -127,19 +87,11 @@ async function markFailed(rows, message, atMs) {
   });
 }
 
-// Collapses concurrent triggers (the page's `online` event and the service
-// worker's `sync` event can fire within milliseconds of each other) onto a
-// single pass. The server dedupes on eventId, so a double POST is only wasteful,
-// not wrong - but one pass is cheaper.
+// Concurrent triggers share one drain.
 let inFlight = null;
 
 /**
- * Drain every eligible `syncQueue` row to the sync endpoint.
- *
- * Eligible = `pending`, or `failed` whose `nextAttemptAt` has passed. Rows are
- * sent oldest-first in batches of `batchSize`. A transport failure (offline)
- * backs the current batch off and stops; a per-record server verdict decides
- * each remaining row individually.
+ * Send every pending row, and every failed row whose backoff has passed.
  *
  * @param {object}   [opts]
  * @param {string}   [opts.endpoint=SYNC_ENDPOINT]
@@ -181,7 +133,6 @@ async function runDrain({
   };
   if (eligible.length === 0) return summary;
 
-  // Join each queue row to its attendance record (they share `eventId`).
   const events = await db.attendanceEvents
     .where('eventId')
     .anyOf(eligible.map((r) => r.eventId))
@@ -191,8 +142,7 @@ async function runDrain({
   for (let i = 0; i < eligible.length; i += batchSize) {
     const slice = eligible.slice(i, i + batchSize);
 
-    // An orphan row (its attendance record was deleted) can never sync. Retire
-    // it so it stops blocking the queue - the data it pointed at is already gone.
+    // Retire rows whose attendance record no longer exists.
     const orphans = slice.filter((row) => !eventByEventId.has(row.eventId));
     if (orphans.length > 0) {
       await markSettled(orphans, startedAt);
@@ -216,8 +166,7 @@ async function runDrain({
         body: JSON.stringify(body),
       });
     } catch (err) {
-      // Almost certainly still offline. Back this batch off and stop; the
-      // untouched later batches stay `pending` for the next reconnect.
+      // Probably offline: stop and leave later batches pending.
       await markFailed(rows, err?.message ?? 'network error', startedAt);
       summary.failed += rows.length;
       summary.batches += 1;
@@ -228,8 +177,7 @@ async function runDrain({
       await markFailed(rows, `sync endpoint responded ${response.status}`, startedAt);
       summary.failed += rows.length;
       summary.batches += 1;
-      // 5xx / 429: server is unwell, stop pushing. 4xx: a malformed record in
-      // this batch - move on so it cannot wedge the rest of the queue.
+      // Stop on 5xx/429. On other 4xx, skip this batch so it cannot block the rest.
       if (response.status >= 500 || response.status === 429) break;
       continue;
     }
@@ -247,11 +195,8 @@ async function runDrain({
 }
 
 /**
- * Ask the browser to drain the queue when it next has connectivity.
- *
- * Prefers the Background Sync API (fires even if the tab is closed); falls back
- * to nudging the active service worker, then to a direct in-page drain when
- * there is no service worker at all (e.g. `vite dev` without the PWA plugin).
+ * Uses Background Sync when available, else messages the service worker, else
+ * drains directly in the page.
  *
  * @returns {Promise<'background-sync'|'message'|'direct'|'unavailable'>}
  */
@@ -266,7 +211,6 @@ export async function requestBackgroundSync() {
         await reg.sync.register(DRAIN_SYNC_TAG);
         return 'background-sync';
       }
-      // Firefox / Safari: no Background Sync - drain now via the active worker.
       reg.active?.postMessage({ type: 'REPLAY_SYNC' });
       return 'message';
     } catch {
@@ -282,8 +226,7 @@ export async function requestBackgroundSync() {
 }
 
 /**
- * Wire the page to trigger a sync whenever connectivity is restored, and once
- * now in case the app launched online with a backlog. Call from main.jsx.
+ * Sync on every reconnect, and once now if online.
  *
  * @returns {() => void} an unsubscribe function
  */

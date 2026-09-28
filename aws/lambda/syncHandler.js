@@ -1,20 +1,12 @@
 'use strict';
 
 /**
- * AWS Lambda - attendance sync ingest (behind API Gateway, POST /sync).
+ * AWS Lambda: attendance sync ingest (API Gateway, POST /sync).
  *
- * Flow:
- *   1. Parse + validate the batch with Ajv (attendanceSync.schema.js).
- *   2. Collapse duplicate eventIds inside the payload.
- *   3. BatchGetItem on ATTENDANCE_TABLE (key: eventId) to find records already
- *      stored -> those are "skipped".
- *   4. BatchWriteItem the survivors into ATTENDANCE_TABLE.
- *   5. BatchWriteItem one audit entry per successfully written record into
- *      AUDIT_TABLE.
- *   6. Return { inserted, skipped, failed } so the Tier 2 worker knows which
- *      queue rows to close and which to retry.
+ * Validates the batch, skips eventIds already stored, writes the rest plus an
+ * audit row each, and returns { inserted, skipped, failed }.
  *
- * Table assumptions (DynamoDB):
+ * DynamoDB tables:
  *   ATTENDANCE_TABLE  partition key: eventId (S)
  *   AUDIT_TABLE       partition key: auditId (S)
  */
@@ -64,7 +56,6 @@ async function findExistingEventIds(ids) {
   const existing = new Set();
   for (const group of chunk(ids, BATCH_GET_MAX)) {
     let keys = group.map((eventId) => ({ eventId }));
-    // retry UnprocessedKeys with exponential backoff
     for (let attempt = 0; attempt < 5 && keys.length; attempt += 1) {
       if (attempt) await sleep(2 ** attempt * 50);
       const res = await ddb.send(
@@ -124,7 +115,6 @@ exports.handler = async (event) => {
   const { records, deviceId } = payload;
   const now = new Date().toISOString();
 
-  // De-dupe within the payload (keep first occurrence of each eventId).
   const byEventId = new Map();
   for (const r of records) if (!byEventId.has(r.eventId)) byEventId.set(r.eventId, r);
   const unique = [...byEventId.values()];
@@ -133,7 +123,6 @@ exports.handler = async (event) => {
   try {
     existing = await findExistingEventIds([...byEventId.keys()]);
   } catch (err) {
-    // Cannot tell new from old -> ask the caller to retry the whole batch.
     return json(503, { error: 'dedupe lookup failed', detail: err.message });
   }
 
@@ -142,7 +131,6 @@ exports.handler = async (event) => {
     .filter((r) => existing.has(r.eventId))
     .map((r) => ({ eventId: r.eventId, reason: 'duplicate_event_id' }));
 
-  // Write attendance rows.
   const attendanceItems = toInsert.map((r) => ({
     eventId: r.eventId,
     studentId: r.studentId,
@@ -164,7 +152,6 @@ exports.handler = async (event) => {
   const failedIds = new Set(writeFailedItems.map((i) => i.eventId));
   const inserted = toInsert.map((r) => r.eventId).filter((id) => !failedIds.has(id));
 
-  // One audit entry per successfully written record.
   const auditItems = inserted.map((eventId) => {
     const rec = byEventId.get(eventId);
     return {
@@ -182,8 +169,7 @@ exports.handler = async (event) => {
       console.warn(`[syncHandler] ${auditFailed.length} audit rows not written`);
     }
   } catch (err) {
-    // Audit is best-effort: the attendance rows are already committed, so don't
-    // fail the whole request (which would cause duplicate-safe re-sends anyway).
+    // Audit is best-effort; the attendance rows are already written.
     console.error('[syncHandler] audit write error', err);
   }
 

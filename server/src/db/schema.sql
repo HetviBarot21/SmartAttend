@@ -1,22 +1,5 @@
--- SmartAttend AI - Tier 2 backend schema (SQLite)
---
--- Fresh server-side schema. It mirrors the concepts in the client's Dexie
--- database (client/src/db/database.js) so records can line up during sync
--- later, but uses SQL conventions (snake_case, real foreign keys, CHECK
--- constraints) and adds the tables the hardware simulation needs.
---
--- Eight tables:
---   schools, class_groups, students        - roster
---   rfid_cards                             - card UID -> student binding
---   attendance_events                      - the append-only attendance log
---   fingerprint_challenges                 - every biometric challenge + outcome
---   sync_queue                             - records waiting to reach AWS, plus the
---                                            outbound retry/backoff state syncWorker.js keeps
---   audit_log                              - who/what/when, for traceability
---
--- Duplicate prevention is enforced by the database, not by application checks:
---   attendance_events.event_id       UNIQUE  - device-generated idempotency key
---   attendance_events(student_id,date) UNIQUE - one record per student per day
+-- SmartAttend AI Tier 2 schema (SQLite). Mirrors the client's Dexie database.
+-- Unique constraints on event_id and (student_id, date) block duplicate records.
 
 PRAGMA foreign_keys = ON;
 
@@ -51,8 +34,7 @@ CREATE TABLE IF NOT EXISTS students (
 
 CREATE INDEX IF NOT EXISTS idx_students_class ON students(class_group_id);
 
--- One physical card maps to one student. A student may be re-issued a card, so
--- the old row is kept with active = 0 rather than deleted.
+-- A replaced card is kept with active = 0.
 CREATE TABLE IF NOT EXISTS rfid_cards (
   card_uid    TEXT PRIMARY KEY,
   student_id  TEXT NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
@@ -82,9 +64,7 @@ CREATE TABLE IF NOT EXISTS attendance_events (
 CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance_events(date);
 CREATE INDEX IF NOT EXISTS idx_attendance_student ON attendance_events(student_id);
 
--- Every fingerprint challenge the RFID handler raises, whether it passed or not.
--- A 'no_match' row with event_id NULL is a rejected scan - no attendance was
--- written. This is the buddy-punching audit trail.
+-- A 'no_match' row with event_id NULL is a rejected scan.
 CREATE TABLE IF NOT EXISTS fingerprint_challenges (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   student_id    TEXT NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,
@@ -97,14 +77,8 @@ CREATE TABLE IF NOT EXISTS fingerprint_challenges (
 
 CREATE INDEX IF NOT EXISTS idx_challenge_student ON fingerprint_challenges(student_id);
 
--- Outbound queue: one row per attendance_event that still has to reach AWS.
---   payload          - JSON snapshot POSTed to the sync Lambda (matches
---                      attendanceSync.schema.js). NULL for legacy rows; the
---                      worker rebuilds it from attendance_events in that case.
---   next_attempt_at  - ISO; NULL means "eligible now". Set by the worker's
---                      exponential backoff after a retryable failure.
---   status 'dead'    - retryable failures that exhausted SYNC_MAX_ATTEMPTS.
---   status 'failed'  - the cloud rejected the payload (4xx); a retry won't help.
+-- Outbound queue to AWS. next_attempt_at NULL means due now. 'dead' means
+-- SYNC_MAX_ATTEMPTS ran out; 'failed' means AWS rejected the payload.
 CREATE TABLE IF NOT EXISTS sync_queue (
   id              INTEGER PRIMARY KEY AUTOINCREMENT,
   event_id        TEXT NOT NULL UNIQUE REFERENCES attendance_events(event_id) ON DELETE CASCADE,
@@ -131,10 +105,7 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 CREATE INDEX IF NOT EXISTS idx_audit_action ON audit_log(action);
 
--- One row per time a teacher/admin reaches out about a flagged student. There is
--- no "resolved" workflow - a fresh flag after a gap simply gets a fresh row.
--- getFlaggedStudents() treats a student as "needs follow-up" when their most
--- recent row (if any) is older than FOLLOW_UP_FRESH_DAYS (src/lib/riskModel.js).
+-- One row per contact attempt about a flagged student.
 CREATE TABLE IF NOT EXISTS follow_ups (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   student_id   TEXT NOT NULL REFERENCES students(student_id) ON DELETE CASCADE,

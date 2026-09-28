@@ -1,11 +1,6 @@
 import { ChevronLeftIcon, ChevronDownIcon, UserIcon } from './icons';
 
-/**
- * Screen header: a title (or a back button) on the left, an account button on
- * the right. The account button carries the online/offline dot so that status
- * has a home on every screen without a full status bar. When `onTitleClick` is
- * set the title becomes a button (the class switcher).
- */
+/** Screen header. With `onTitleClick` the title opens the class switcher. */
 export default function TopBar({ title, onBack, online, onAccount, onTitleClick }) {
   return (
     <header className="topbar">

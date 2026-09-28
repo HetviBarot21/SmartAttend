@@ -1,26 +1,12 @@
 #!/usr/bin/env python
 """Train and evaluate the SmartAttend AI persistent-absenteeism models.
 
-Pipeline position
------------------
-    raw xlsx  (Daily Attendance + School Calendar sheets)
-      -> normalise statuses / ids, build a per-school SchoolCalendar
-      -> compute_labels.build_training_table   (7 features + label per student/as_of)
-      -> temporal_split.temporal_train_test_split   (SCH-01 only; SCH-02 held out whole)
-      -> {RandomForest, LogisticRegression, rule-based}  fit on the SCH-01 train split
-      -> evaluate on the SCH-01 test split  and  the full SCH-02 unseen school
-      -> ml/models/rf_model.pkl , ml/results/evaluation_report.json
+Models are fitted on a temporal split of SCH-01 and also evaluated on SCH-02,
+which is never trained on. A 28-day gap before the split boundary keeps label
+windows from crossing it.
 
-Everything is seeded (42) and strictly time-ordered. No row dated on or after the
-SCH-01 split boundary reaches the training set, and a gap equal to the label
-horizon (28 days) is removed *ahead* of the boundary so a training row's forward
-label window cannot cross it (temporal_split.temporal_train_test_split(gap=...)).
-SCH-02 is never fitted on - it measures generalisation to an unseen school.
-
-The heavy step is building the supervised table from ~350k-450k attendance rows;
-it is cached to ml/data/supervised_<file>.pkl and reused until the xlsx or the
-pipeline version changes. Use --rebuild to force it, --max-students N for a fast
-dry run.
+The supervised table is cached in ml/data/supervised_<file>.pkl. Use --rebuild
+to rebuild it, and --max-students N for a quick run.
 
 Usage
 -----
@@ -53,7 +39,6 @@ from sklearn.metrics import (
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
-# The sibling pipeline modules import each other by bare name; match that.
 _HERE = Path(__file__).resolve().parent
 if str(_HERE) not in sys.path:
     sys.path.insert(0, str(_HERE))
@@ -67,9 +52,7 @@ from feature_engineering import (  # noqa: E402
 )
 from temporal_split import temporal_train_test_split  # noqa: E402
 
-# --------------------------------------------------------------------------- #
-# Configuration - fixed so a run is reproducible                              #
-# --------------------------------------------------------------------------- #
+# Configuration
 
 SEED = 42
 LABEL_HORIZON_DAYS = 28           # matches compute_labels.FOUR_WEEKS
@@ -87,12 +70,9 @@ RESULTS_DIR = ML_DIR / "results"
 
 np.random.seed(SEED)
 
-# --------------------------------------------------------------------------- #
-# Raw data -> normalised attendance events + school calendar                  #
-# --------------------------------------------------------------------------- #
+# Raw data -> normalised attendance events + school calendar
 
-# The Daily Attendance sheet spells each status ~14 ways ("P", "pres",
-# "PRESENT", "Present", "present", ...). Everything else is dropped and counted.
+# The sheet spells each status many ways ("P", "pres", "PRESENT", ...).
 _STATUS_MAP = {
     "p": "present", "pres": "present", "present": "present",
     "a": "absent", "abs": "absent", "absent": "absent",
@@ -107,9 +87,8 @@ def _normalise_status(series: pd.Series) -> pd.Series:
 def load_daily_attendance(xlsx_path: Path) -> pd.DataFrame:
     """Daily Attendance sheet -> tidy frame: student_id, date, status.
 
-    Admission numbers are upper-cased (the sheet mixes "ADM01432" / "adm01432"),
-    statuses are normalised to present/absent/late, unmapped rows are dropped,
-    and a (student, date) collision keeps the last row after a stable sort.
+    Admission numbers are upper-cased, unmapped statuses are dropped, and a
+    duplicate (student, date) keeps the last row.
     """
     raw = pd.read_excel(xlsx_path, sheet_name="Daily Attendance")
     df = pd.DataFrame(
@@ -133,10 +112,8 @@ def load_daily_attendance(xlsx_path: Path) -> pd.DataFrame:
 def load_calendar(xlsx_path: Path) -> SchoolCalendar:
     """School Calendar sheet -> SchoolCalendar over the exact school_day set.
 
-    Each scheduled day becomes a one-day 'term' with no weekend rule and no
-    holidays, so SchoolCalendar._materialise reproduces precisely the days the
-    sheet marks 'school_day' (2017-2024) - the 2026 kenya_calendar.json does not
-    cover this data.
+    Each school day becomes a one-day term, so the calendar holds exactly the
+    days the sheet marks as school days.
     """
     raw = pd.read_excel(xlsx_path, sheet_name="School Calendar")
     days = sorted(
@@ -157,11 +134,7 @@ def load_calendar(xlsx_path: Path) -> SchoolCalendar:
 def load_term_bounds(xlsx_path: Path) -> list[tuple[str, dt.date, dt.date]]:
     """School Calendar sheet's own ``term`` column -> ``[(name, start, end), ...]``.
 
-    Distinct from :func:`load_calendar`'s flat school-day list (used for rate
-    windows regardless of term structure) - this is specifically the term
-    boundaries `attendance_rate_term` / `days_into_term` need. "Inter-term
-    holiday" is not a real term and is dropped; a reference date landing there
-    correctly gets no enclosing term (features 10-11 come back nan).
+    "Inter-term holiday" rows are dropped.
     """
     raw = pd.read_excel(xlsx_path, sheet_name="School Calendar")
     raw = raw[raw["term"].astype(str).str.strip() != "Inter-term holiday"]
@@ -175,10 +148,7 @@ def load_term_bounds(xlsx_path: Path) -> list[tuple[str, dt.date, dt.date]]:
 def load_absence_reasons(xlsx_path: Path) -> dict[str, dict[dt.date, str]]:
     """"Absence Reasons" sheet -> ``{student_id: {date: 'fee'|'health'}}``.
 
-    Only categorisable reasons are kept (see
-    :func:`feature_engineering.categorize_reason`); everything else - burial,
-    farm work, "unknown", missing - is simply absent from the per-student dict,
-    which is exactly what `reason_absence_rate` treats as "not fee, not health".
+    Reasons that are neither fee nor health are left out.
     """
     raw = pd.read_excel(xlsx_path, sheet_name="Absence Reasons")
     out: dict[str, dict[dt.date, str]] = {}
@@ -195,10 +165,8 @@ def load_absence_reasons(xlsx_path: Path) -> dict[str, dict[dt.date, str]]:
 def _drop_out_of_enrolment(table: pd.DataFrame, events: pd.DataFrame) -> pd.DataFrame:
     """Remove samples whose as_of sits outside a student's active span.
 
-    A student with a handful of records otherwise contributes hundreds of
-    all-absent windows (a scheduled day with no record counts as an absence),
-    which are noise, not signal. The span is [first record, last record]; a
-    margin keeps the feature/label windows genuinely inside it.
+    Otherwise a student with few records adds many all-absent windows, since
+    a school day with no record counts as an absence.
     """
     if table.empty:
         return table
@@ -280,9 +248,7 @@ def supervised_table(
     return table
 
 
-# --------------------------------------------------------------------------- #
-# Models                                                                      #
-# --------------------------------------------------------------------------- #
+# Models
 
 
 def make_random_forest() -> Pipeline:
@@ -324,7 +290,7 @@ def make_logistic_regression() -> Pipeline:
 
 
 class RuleBasedScorer:
-    """Transparent weighted-risk baseline - no learning.
+    """Weighted-risk baseline with no learning.
 
     Risk score on [0, 1] from four of the engineered features:
 
@@ -332,9 +298,6 @@ class RuleBasedScorer:
               + 0.30 * monthly_rate  1 - mean(attendance_rate_w1, attendance_rate_w2)
               + 0.15 * day_of_week   dow_concentration
               + 0.15 * trend         max(0, -attendance_trend), capped at 1
-
-    The consecutive ramp reaches 1.0 at 5 absences - the same point the hard
-    override forces red.
 
     Flag:
         red    if score >= 0.60  OR  longest_absence_streak >= 5   (hard override)
@@ -344,8 +307,7 @@ class RuleBasedScorer:
     Binary prediction = 1 when the flag is amber or red. For AUC, an overridden
     sample is scored 1.0 so it ranks above every non-overridden one.
 
-    Missing rate features are read as "attended" (1.0) and missing counts as 0 -
-    a holiday-only window should not look risky.
+    Missing rates are read as 1.0 and missing counts as 0.
     """
 
     WEIGHTS = {"consecutive": 0.40, "monthly_rate": 0.30, "day_of_week": 0.15, "trend": 0.15}
@@ -355,7 +317,7 @@ class RuleBasedScorer:
     OVERRIDE_STREAK = 5
     POSITIVE_FLAGS = ("amber", "red")
 
-    def fit(self, X, y=None):  # noqa: D401 - sklearn-style no-op
+    def fit(self, X, y=None):  # noqa: D401
         self.train_positive_rate_ = None if y is None else float(np.mean(np.asarray(y)))
         return self
 
@@ -414,9 +376,7 @@ class RuleBasedScorer:
         return np.column_stack([1.0 - pos, pos])
 
 
-# --------------------------------------------------------------------------- #
-# Evaluation + reporting                                                      #
-# --------------------------------------------------------------------------- #
+# Evaluation + reporting
 
 
 def evaluate(y_true, y_score, y_pred) -> dict:
@@ -516,9 +476,7 @@ def _print_comparison(report: dict) -> None:
             print(f"  {feat:<24} {imp:.3f}")
 
 
-# --------------------------------------------------------------------------- #
-# Orchestration                                                               #
-# --------------------------------------------------------------------------- #
+# Orchestration
 
 
 def _locate(prefix: str) -> Path:
@@ -552,8 +510,6 @@ def main(argv=None) -> int:
     if table01.empty or table02.empty:
         sys.exit("no labelled samples produced - check the data files")
 
-    # SCH-01: strict temporal split, gap = label horizon so no training row's
-    # forward window crosses the boundary. SCH-02 stays fully held out.
     train01, test01 = temporal_train_test_split(
         table01, test_size=TEST_SIZE, date_col="as_of", gap=LABEL_HORIZON_DAYS
     )

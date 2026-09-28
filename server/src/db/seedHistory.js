@@ -1,16 +1,8 @@
 /**
- * Backfills ~1 month of attendance_events for the seeded demo roster (see
- * db/seed.js) so the admin endpoints (routes/admin.js) have real numbers to
- * show right after `npm run db:reset` - a school with a single day of
- * attendance can't demonstrate an absenteeism trend or a risk flag.
+ * Backfills about a month of deterministic demo attendance for the seeded
+ * roster. Skipped if the roster already has history.
  *
- * Deterministic (same seed -> same history) and mirrors the profile shapes
- * client/src/db/seedData.js uses for its own demo history, so the server and
- * client tell the same visual story if both are demoed side by side. Skipped
- * if the roster already has attendance history, so it never overwrites a real
- * pilot's data.
- *
- * Run directly: node src/db/seedHistory.js   (wired to `npm run db:seed-history`)
+ * Run: npm run db:seed-history
  */
 import { openDatabase } from './index.js';
 import { DEMO_STUDENTS } from './seed.js';
@@ -45,7 +37,7 @@ function todayISO(now = new Date()) {
   return new Date(now.getTime() - offset).toISOString().split('T')[0];
 }
 
-// ctx: { rand [0,1), fromEnd: school days remaining until today }. 'present' | 'absent' | 'late'.
+// Each profile maps { rand, fromEnd } to a status. fromEnd counts school days left.
 const PROFILES = {
   steady: ({ rand }) => (rand < 0.04 ? 'absent' : rand < 0.1 ? 'late' : 'present'),
   latecomer: ({ rand }) => (rand < 0.05 ? 'absent' : rand < 0.34 ? 'late' : 'present'),

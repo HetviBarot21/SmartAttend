@@ -1,8 +1,4 @@
-/**
- * Shared Ajv instance. Compiled validators are cached per schema object so
- * routes and the worker can `validate(schema, data)` without recompiling on
- * every request.
- */
+/** Shared Ajv instance with validators cached per schema. */
 
 import _Ajv from 'ajv/dist/2020.js';
 import _addFormats from 'ajv-formats';

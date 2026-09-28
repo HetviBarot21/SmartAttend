@@ -8,9 +8,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 const SCHEMA_PATH = resolve(here, 'schema.sql');
 
 /**
- * Open a database and apply the schema. `schema.sql` is written with
- * CREATE TABLE IF NOT EXISTS, so calling this against an existing file is a
- * no-op - safe to run on every boot.
+ * Open a database and apply the schema. Safe to run on every boot.
  *
  * @param {string} path  file path, or ':memory:' for an ephemeral DB (tests)
  */
@@ -28,12 +26,7 @@ export function openDatabase(path = config.dbPath) {
   return db;
 }
 
-/**
- * Column additions to tables that already existed before this column was
- * introduced. `CREATE TABLE IF NOT EXISTS` (above) is a no-op against an
- * existing table, so a new column needs an explicit, idempotent ALTER here -
- * this runs on every boot and is a no-op once the column is present.
- */
+/** Columns added after a table was first created. Safe to run on every boot. */
 function migrate(db) {
   const hasColumn = (table, column) =>
     db.prepare(`SELECT 1 FROM pragma_table_info(?) WHERE name = ?`).get(table, column) != null;
@@ -54,7 +47,6 @@ function migrate(db) {
 
 let singleton = null;
 
-/** The process-wide database used by the running server. */
 export function getDb() {
   if (!singleton) singleton = openDatabase();
   return singleton;

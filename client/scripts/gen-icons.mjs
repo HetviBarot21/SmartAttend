@@ -1,12 +1,6 @@
 /**
- * Generates the PWA icon set with zero dependencies (Node's built-in zlib only).
- *
- * The manifest referenced pwa-192x192.png / pwa-512x512.png but public/ shipped
- * none, so the app failed Chrome's installability check. This draws a simple,
- * on-brand mark - indigo rounded square, white check - at the sizes a PWA needs,
- * including a maskable variant with safe-zone padding and an Apple touch icon.
- *
- * Re-run after changing the brand color or mark:  node scripts/gen-icons.mjs
+ * Generates the PWA icons (indigo square, white check) using only Node's zlib.
+ * Run: node scripts/gen-icons.mjs
  */
 import { deflateSync } from 'node:zlib';
 import { writeFileSync, mkdirSync } from 'node:fs';
@@ -16,7 +10,7 @@ import { dirname, join } from 'node:path';
 const OUT = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
 mkdirSync(OUT, { recursive: true });
 
-const INDIGO = [79, 70, 229];   // #4f46e5 - matches the app's --indigo
+const INDIGO = [79, 70, 229]; // #4f46e5
 const WHITE = [255, 255, 255];
 
 function crc32(buf) {
@@ -92,9 +86,7 @@ function blend(out, i, rgb, a) {
 function draw(size, { padding = 0, bleed = false }) {
   const px = new Uint8ClampedArray(size * size * 4); // transparent
   const c = size / 2;
-  // Maskable icons must fill the whole canvas (the OS crops to its own shape);
-  // the mark then lives inside the ~80% safe zone. Non-maskable icons inset the
-  // rounded square itself.
+  // Maskable icons fill the canvas and keep the mark inside the safe zone.
   const half = bleed ? size : size * (0.5 - padding);
   const radius = bleed ? 0 : size * 0.22;
   const stroke = size * 0.075;

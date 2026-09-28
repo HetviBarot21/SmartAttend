@@ -5,11 +5,7 @@ import { config } from '../config.js';
 import { DEMO_CARD_UIDS } from '../db/seed.js';
 
 /**
- * Mock RFID reader.
- *
- * Emits a `card-detected` event on a fixed interval, each time with a random
- * card UID drawn from a hardcoded list (the demo class's cards). Stands in for
- * an MFRC522 reader wired to the door until real hardware arrives.
+ * Mock RFID reader. Emits a random demo card UID on a fixed interval.
  *
  * Events:
  *   'card-detected'  ({ cardUid, scanId, detectedAt })
@@ -46,11 +42,9 @@ export class RfidEmitter extends EventEmitter {
     return this._count;
   }
 
-  /** Begin emitting. No-op if already running. */
   start() {
     if (this._timer) return this;
     this._timer = setInterval(() => this._emitOne(), this.intervalMs);
-    // Don't hold the process open on our account (matters for tests / shutdown).
     this._timer.unref?.();
     this.emit('started', { intervalMs: this.intervalMs, cards: this.cardUids.length });
     return this;
@@ -64,7 +58,7 @@ export class RfidEmitter extends EventEmitter {
     return this;
   }
 
-  /** Fire a single scan immediately - handy for tests and for a manual trigger. */
+  /** Fire a single scan immediately. */
   emitOnce() {
     return this._emitOne();
   }

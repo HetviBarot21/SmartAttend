@@ -16,12 +16,9 @@ import { verifyPin, setPin, hasPin, getPinStatus, clearLockout } from './pin';
 const AuthContext = createContext(null);
 
 /**
- * Three states, because "signed out" and "session expired while offline" need
- * different screens:
- *   signedOut - no session on the device; password login only.
- *   locked    - a session exists but its token has expired; the teacher can
- *               unlock with their PIN without any network.
- *   ready     - authenticated, attendance capture is available.
+ *   signedOut: no session on the device.
+ *   locked:    the session expired; the PIN unlocks it offline.
+ *   ready:     signed in.
  */
 export const AUTH_STATUS = { LOADING: 'loading', SIGNED_OUT: 'signedOut', LOCKED: 'locked', READY: 'ready' };
 
@@ -111,7 +108,6 @@ export function AuthProvider({ children }) {
     setStatus(AUTH_STATUS.SIGNED_OUT);
   }, []);
 
-  // Demo affordance for the Sprint 1 presentation - see cognito.expireSessionNow.
   const simulateExpiry = useCallback(async () => {
     const expired = await expireSessionNow();
     if (expired) await applySession(expired);

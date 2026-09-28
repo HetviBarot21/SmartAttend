@@ -1,29 +1,15 @@
 /**
  * Client-side absenteeism risk.
  *
- * Two scorers live here:
- *   - `scoreRisk` - the original transparent rule-based scorer (four weighted
- *     features, hand-set thresholds). Kept for its narrative/breakdown value
- *     and as a fallback.
- *   - `scoreRiskML` - the real trained model (HistGradientBoosting, 11
- *     features, F1 0.480/0.484 vs the rule-based scorer's 0.350/0.342 on the
- *     held-out evaluation - see ml/results/evaluation_report.json). This is
- *     what Alerts/StudentProfile actually call now. The app is offline-first,
- *     so "use the trained model" can't mean a network call to a Python
- *     service - `data/riskModel.json` is the model's tree ensemble exported
- *     to plain arrays (`ml/training/export_model.py`), walked here with
- *     ordinary arithmetic. Re-export and copy that file over whenever the
- *     model is retrained.
+ * `scoreRiskML` runs the trained model exported to `data/riskModel.json` by
+ * `ml/training/export_model.py`. Re-export that file whenever the model is
+ * retrained. `scoreRisk` is the older rule-based scorer, kept as a fallback.
  *
- * Feature/label conventions mirror the Python pipeline (`ml/training/`):
- *   - windows are calendar-time (14 / 28 days) counting only school days;
- *   - a school day is Mon–Fri (the Python training pipeline used each
- *     school's own calendar sheet; this is a documented simplification,
- *     applied consistently across every feature here so the model at least
- *     sees internally-consistent inputs);
- *   - a scheduled school day with no record counts as an absence;
- *   - present + late both count as "attended";
- *   - an attendance rate is null only when a window contains zero school days.
+ * Features follow the Python pipeline in `ml/training/`:
+ *   - windows are 14 / 28 calendar days, counting only school days (Mon-Fri);
+ *   - a school day with no record counts as an absence;
+ *   - present and late both count as attended;
+ *   - a rate is null only when its window has no school days.
  */
 
 import mlModel from '../data/riskModel.json';
@@ -55,9 +41,7 @@ const AMBER_THRESHOLD = 0.35;
 const RED_THRESHOLD = 0.6;
 const OVERRIDE_STREAK = 5;
 
-// --------------------------------------------------------------------------- //
-// date helpers — 'YYYY-MM-DD' strings, local time                             //
-// --------------------------------------------------------------------------- //
+// Date helpers: 'YYYY-MM-DD' strings in local time.
 
 function parseISO(iso) {
   const [y, m, d] = iso.split('-').map(Number);
@@ -74,7 +58,6 @@ function addDays(iso, n) {
   dt.setDate(dt.getDate() + n);
   return toISO(dt);
 }
-/** Mon–Fri. getDay(): 0 = Sun … 6 = Sat. */
 export function isSchoolDay(iso) {
   const g = parseISO(iso).getDay();
   return g >= 1 && g <= 5;
@@ -86,10 +69,6 @@ function schoolDaysBetween(startISO, endISO) {
   }
   return out;
 }
-
-// --------------------------------------------------------------------------- //
-// feature engineering                                                         //
-// --------------------------------------------------------------------------- //
 
 /**
  * @param {Array<{date: string, status: string}>} history
@@ -115,9 +94,8 @@ export function computeFeatures(history, asOf = toISO(new Date())) {
   const rate_w2 = windowRate(w2Start, w1Start);
   const rate_w3 = windowRate(w3Start, w2Start);
 
-  // absence structure over the current 4-week window
   const monthDays = schoolDaysBetween(addDays(asOf, -MONTH_DAYS), asOf);
-  const isAbsent = (d) => !ATTENDED.has(byDate.get(d)); // missing record ⇒ absent
+  const isAbsent = (d) => !ATTENDED.has(byDate.get(d));
 
   let longestStreak = 0;
   let currentStreak = 0;
@@ -158,16 +136,8 @@ export function computeFeatures(history, asOf = toISO(new Date())) {
   };
 }
 
-// --------------------------------------------------------------------------- //
-// Kenya term calendar - needed for attendance_rate_term / days_into_term,    //
-// the model's two strongest features by a wide margin (see                   //
-// ml/results/evaluation_report.json feature_importances). Only 2026 is       //
-// defined; outside a known term these two features fall back to null         //
-// (same "not enough information" convention as every other rate here), so    //
-// the model just leans more on the other 9 rather than breaking. Update this //
-// list at the start of each school year - ml/training/kenya_calendar.json    //
-// is the source of truth, kept in sync by hand (it's 3 short entries/year).  //
-// --------------------------------------------------------------------------- //
+// Kenya term dates, copied from ml/training/kenya_calendar.json. Update every
+// school year; outside a known term the two term features are null.
 const KENYA_TERMS = [
   { name: 'Term 1 2026', start: '2026-01-05', end: '2026-04-03' },
   { name: 'Term 2 2026', start: '2026-05-04', end: '2026-08-07' },
@@ -178,7 +148,6 @@ function termContaining(asOf) {
   return KENYA_TERMS.find((t) => t.start <= asOf && asOf <= t.end) ?? null;
 }
 
-/** Recorded school-day observations in the history. */
 export function recordedSchoolDays(history) {
   return history.filter((r) => isSchoolDay(r.date) && r.status).length;
 }
@@ -186,17 +155,14 @@ export function recordedSchoolDays(history) {
 /** Below this many recorded school days the risk score is not shown. */
 export const MIN_ASSESSABLE_DAYS = 8;
 
-/** Whether there is enough recorded history to put a risk flag on a student. */
 export function isAssessable(history) {
   return recordedSchoolDays(history) >= MIN_ASSESSABLE_DAYS;
 }
 
-// --------------------------------------------------------------------------- //
-// scoring — RuleBasedScorer                                                   //
-// --------------------------------------------------------------------------- //
+// Rule-based scorer
 
 const clip01 = (x) => Math.min(1, Math.max(0, x));
-const rateOr1 = (v) => (v == null || Number.isNaN(v) ? 1 : v); // missing ⇒ "attended"
+const rateOr1 = (v) => (v == null || Number.isNaN(v) ? 1 : v);
 const numOr0 = (v) => (v == null || Number.isNaN(v) ? 0 : v);
 
 /**
@@ -229,13 +195,11 @@ export function scoreRisk(f) {
   const flag =
     score >= RED_THRESHOLD || overridden ? 'red' : score >= AMBER_THRESHOLD ? 'amber' : 'green';
 
-  // For display only: the rule-based score doubles as a rough dropout-risk %.
   const dropoutProbability = clip01(overridden ? Math.max(score, 0.75) : score);
 
   return { score, flag, dropoutProbability, overridden, components };
 }
 
-/** Human-readable rows for the Profile "Risk Score Breakdown" panel. */
 export function breakdownRows(components) {
   return [
     { key: 'day_of_week', label: 'Day pattern', value: components.day_of_week },
@@ -245,21 +209,11 @@ export function breakdownRows(components) {
   ];
 }
 
-// --------------------------------------------------------------------------- //
-// scoring — trained model (HistGradientBoosting, exported tree ensemble)      //
-// --------------------------------------------------------------------------- //
+// Trained model
 
 /**
- * The 4 features beyond the original 7 the trained model uses.
- *
- * fee_absence_rate / health_absence_rate always come back 0 here - the app
- * doesn't collect a reason when a teacher marks a student absent, so there is
- * nothing to categorise. 0 (not null) matches the training pipeline's own
- * convention for "no reason data" (ml/training/feature_engineering.py
- * `reason_absence_rate`) - these two are the model's least important
- * features anyway (0.046 / 0.038 importance), so losing them costs little.
- * Collecting a reason at mark-absent time would let these contribute for
- * real; that's a separate product change, not done here.
+ * The 4 extra features the trained model uses. The app does not record absence
+ * reasons, so the fee and health rates are always 0, as in training.
  */
 export function computeMlExtraFeatures(history, asOf = toISO(new Date())) {
   const byDate = new Map(history.map((r) => [r.date, r.status]));
@@ -285,7 +239,6 @@ export function computeMlExtraFeatures(history, asOf = toISO(new Date())) {
 
 const sigmoid = (x) => 1 / (1 + Math.exp(-x));
 
-/** Walk one exported tree from the root; returns its leaf `value`. */
 function walkTree(tree, featureVector) {
   let i = 0;
   while (!tree.isLeaf[i]) {
@@ -297,8 +250,7 @@ function walkTree(tree, featureVector) {
 }
 
 /**
- * Run the exported HistGradientBoosting ensemble on an 11-feature vector
- * (ordered per `mlModel.features` - see `scoreRiskFromFeatures`).
+ * @param {Array<number|null>} orderedFeatures in `mlModel.features` order
  * @returns {number} probability of persistent absenteeism, 0..1
  */
 export function predictMlProbability(orderedFeatures) {
@@ -307,13 +259,7 @@ export function predictMlProbability(orderedFeatures) {
   return sigmoid(raw);
 }
 
-/**
- * Score from an already-computed 11-feature object (the 7 from
- * `computeFeatures` plus the 4 from `computeMlExtraFeatures`, merged).
- * Same return shape as `scoreRisk` (`components` is empty; the rule-based
- * breakdown doesn't apply to a learned model) so it's a drop-in replacement
- * wherever `scoreRisk(computeFeatures(...))` was used.
- */
+/** Same return shape as `scoreRisk`, with empty `components`. */
 export function scoreRiskFromFeatures(allFeatures) {
   const ordered = mlModel.features.map((name) => {
     const v = allFeatures[name];
@@ -331,19 +277,14 @@ export function scoreRiskFromFeatures(allFeatures) {
   return { score: dropoutProbability, flag, dropoutProbability, overridden: false, components: {} };
 }
 
-/** Score a student straight from their attendance history - what Alerts/StudentProfile call. */
 export function scoreRiskML(history, asOf = toISO(new Date())) {
   const base = computeFeatures(history, asOf);
   const extra = computeMlExtraFeatures(history, asOf);
   return scoreRiskFromFeatures({ ...base, ...extra });
 }
 
-// --------------------------------------------------------------------------- //
-// 6-week trend                                                                //
-// --------------------------------------------------------------------------- //
-
 /**
- * Weekly attendance rate for the `weeks` ISO weeks ending at `asOf`.
+ * Weekly attendance rate for the `weeks` weeks ending at `asOf`.
  * @returns {Array<{ label: string, weekStart: string, rate: number|null }>}
  */
 export function weeklyTrend(history, asOf = toISO(new Date()), weeks = 6) {
@@ -360,10 +301,6 @@ export function weeklyTrend(history, asOf = toISO(new Date()), weeks = 6) {
   }
   return out;
 }
-
-// --------------------------------------------------------------------------- //
-// narrative — templated from the numbers (stands in for the ML analysis text) //
-// --------------------------------------------------------------------------- //
 
 const DOW_LABEL = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
@@ -382,10 +319,7 @@ function dominantAbsenceDay(history, asOf) {
   return best == null ? null : { day: DOW_LABEL[best], count: bestN };
 }
 
-/**
- * Short bullet insights for the Alerts card body and the Profile ML panel.
- * @returns {string[]}
- */
+/** @returns {string[]} short insights for the Alerts card and profile */
 export function riskInsights(history, features, risk, asOf = toISO(new Date())) {
   const out = [];
   const streak = features.longest_absence_streak;
@@ -416,10 +350,7 @@ export function riskInsights(history, features, risk, asOf = toISO(new Date())) 
   if (risk.flag === 'red' && out.length === 0) {
     out.push('This pattern points to a high risk of continued absence without a check-in.');
   } else if (risk.flag === 'amber' && out.length === 0) {
-    // No single strong signal, but scoreRiskML flagged it anyway - the
-    // trained model weighs the full attendance picture (including the
-    // term-to-date rate), not just the handful of patterns worded above.
-    // Saying "normal range" here would flatly contradict the amber badge.
+    // The model can flag amber without any of the patterns above.
     out.push('No single strong reason stands out, but the overall pattern is still worth a check-in.');
   }
 
@@ -427,7 +358,6 @@ export function riskInsights(history, features, risk, asOf = toISO(new Date())) 
   return out;
 }
 
-/** One-line summary for the Alerts list (risk domain label + %). */
 export function riskHeadline(risk) {
   const pct = Math.round(risk.dropoutProbability * 100);
   return { label: 'Absenteeism risk', pct };

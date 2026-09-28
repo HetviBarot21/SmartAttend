@@ -12,7 +12,7 @@ import Avatar from './Avatar';
 import TopBar from './TopBar';
 import CardList from './CardList';
 
-/** Class roster editor - enrol / remove students, reissue lost RFID cards. */
+/** Class roster editor: enrol and remove students, reissue lost cards. */
 export default function RosterManager({ classGroupId, className, onClose }) {
   const [active, setActive] = useState([]);
   const [removed, setRemoved] = useState([]);
@@ -193,7 +193,7 @@ export default function RosterManager({ classGroupId, className, onClose }) {
                 <div className="roll-row__who" style={{ cursor: 'default' }}>
                   <span className="roll-row__name">{s.fullName}</span>
                   <span className="roll-row__id">
-                    Adm {s.admissionNo || '—'} · card <b>{s.cardUid || '—'}</b>
+                    Adm {s.admissionNo || '-'} · card <b>{s.cardUid || '-'}</b>
                     {' · '}
                     {reissueId === s.studentId ? (
                       <>

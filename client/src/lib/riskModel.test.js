@@ -26,7 +26,7 @@ function historyEndingBefore(asOf, count, statusFor) {
 const AS_OF = '2026-09-07'; // a Monday
 
 describe('computeFeatures', () => {
-  it('is all-present ⇒ rate 1, no streak, no episodes', () => {
+  it('is all-present: rate 1, no streak, no episodes', () => {
     const history = historyEndingBefore(AS_OF, 30, () => 'present');
     const f = computeFeatures(history, AS_OF);
     expect(f.attendance_rate_w1).toBe(1);
@@ -37,7 +37,7 @@ describe('computeFeatures', () => {
   });
 
   it('counts a missing record on a school day as an absence', () => {
-    // only two records, both weeks back ⇒ recent windows are entirely missing
+    // only two old records, so the recent windows are empty
     const f = computeFeatures(
       [{ date: '2026-07-01', status: 'present' }],
       AS_OF
@@ -60,7 +60,7 @@ describe('computeFeatures', () => {
   });
 });
 
-describe('scoreRisk — parity with the Python RuleBasedScorer', () => {
+describe('scoreRisk matches the Python RuleBasedScorer', () => {
   it('flags green for a student who always attends', () => {
     const f = computeFeatures(historyEndingBefore(AS_OF, 30, () => 'present'), AS_OF);
     expect(scoreRisk(f).flag).toBe('green');
@@ -113,11 +113,9 @@ describe('weeklyTrend', () => {
   });
 });
 
-describe('scoreRiskFromFeatures (trained model) — matches the live Python model exactly', () => {
-  // Generated from ml/models/best_model.pkl via model.predict_proba() - see
-  // the export_model.py commit. Any drift here means the JS port and the
-  // Python model have diverged (export changed without re-copying the JSON,
-  // a tree-walk bug, etc.) - this is the tripwire for that.
+describe('scoreRiskFromFeatures matches the Python model exactly', () => {
+  // Expected values from the Python model's predict_proba(). A mismatch means
+  // the JS port and the Python model have diverged.
   const CASES = [
     {
       name: 'steady attender - still not near-zero, reflects the base rate',

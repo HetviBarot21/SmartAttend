@@ -63,9 +63,7 @@ ALWAYS_ABSENT = lambda d: "absent"
 MONDAY_ABSENT = lambda d: "absent" if d.weekday() == 0 else "present"
 
 
-# --------------------------------------------------------------------------- #
-# Calendar                                                                    #
-# --------------------------------------------------------------------------- #
+# Calendar
 
 
 def test_calendar_loads_three_terms_from_json():
@@ -88,9 +86,7 @@ def test_calendar_week_has_five_school_days_in_clean_stretch():
     assert CAL.count_school_days(date(2026, 2, 2), date(2026, 2, 16)) == 10
 
 
-# --------------------------------------------------------------------------- #
-# Feature computation - the required scenarios                                #
-# --------------------------------------------------------------------------- #
+# Feature computation: main scenarios
 
 
 def test_normal_attendance_is_all_ones_and_zeros():
@@ -146,9 +142,7 @@ def test_term_start_absence():
     assert feats["attendance_trend"] == pytest.approx(1.0)    # w1 - w2
 
 
-# --------------------------------------------------------------------------- #
-# Absence-reason categories + term-relative features                          #
-# --------------------------------------------------------------------------- #
+# Absence reasons and term features
 
 
 def test_categorize_reason():
@@ -163,7 +157,6 @@ def test_categorize_reason():
 
 
 def test_fee_and_health_absence_rate_without_reasons_is_zero_not_nan():
-    # No reasons supplied at all - a real, known zero, not a missing measurement.
     feats = compute_features(records(ALWAYS_ABSENT), AS_OF)
     assert feats["fee_absence_rate"] == 0.0
     assert feats["health_absence_rate"] == 0.0
@@ -184,7 +177,6 @@ def test_fee_and_health_absence_rate_with_reasons():
             reasons[day] = "fee"
         elif i < 15:
             reasons[day] = "health"
-        # remaining 5 stay uncategorised
 
     feats = compute_features(recs, AS_OF, reasons=reasons)
     assert feats["fee_absence_rate"] == pytest.approx(10 / 20)
@@ -220,9 +212,7 @@ def test_new_features_dont_change_original_seven_when_omitted():
     assert feats["dow_concentration"] == pytest.approx(1.0)
 
 
-# --------------------------------------------------------------------------- #
-# Feature computation - edge cases                                            #
-# --------------------------------------------------------------------------- #
+# Feature computation: edge cases
 
 
 def test_empty_records_are_treated_as_all_absent():
@@ -241,7 +231,6 @@ def test_window_with_no_school_days_yields_nan_rate():
     feats = compute_features(records(ALWAYS_PRESENT), date(2026, 4, 20))
     assert math.isnan(feats["attendance_rate_w1"])   # [Apr6, Apr20): no school days
     assert math.isnan(feats["attendance_trend"])     # depends on w1
-    # Counts still resolve to finite numbers.
     assert feats["longest_absence_streak"] >= 0.0
     assert feats["absence_episode_count"] >= 0.0
     assert 0.0 <= feats["dow_concentration"] <= 1.0
@@ -296,9 +285,7 @@ def test_attendance_rate_helper_direct():
     assert math.isnan(attendance_rate(by_day, CAL, date(2026, 4, 6), date(2026, 4, 20)))
 
 
-# --------------------------------------------------------------------------- #
-# Labels                                                                      #
-# --------------------------------------------------------------------------- #
+# Labels
 
 
 def test_label_is_one_for_chronic_absentee():
@@ -342,9 +329,7 @@ def test_label_uses_only_forward_window():
     assert compute_label(past_absences + future_present, AS_OF) == 0.0
 
 
-# --------------------------------------------------------------------------- #
-# Dataset assembly                                                            #
-# --------------------------------------------------------------------------- #
+# Dataset assembly
 
 
 def test_build_training_table_shape_and_columns():
@@ -361,7 +346,6 @@ def test_build_training_table_shape_and_columns():
     assert set(table["student_id"]) == {"regular", "chronic"}
     assert (table.loc[table["student_id"] == "chronic", LABEL_NAME] == 1.0).all()
     assert (table.loc[table["student_id"] == "regular", LABEL_NAME] == 0.0).all()
-    # sorted by time
     assert table["as_of"].is_monotonic_increasing
 
 
@@ -378,9 +362,7 @@ def test_generate_reference_dates_leaves_room_both_sides():
     assert all(b - a == timedelta(days=14) for a, b in zip(dates, dates[1:]))
 
 
-# --------------------------------------------------------------------------- #
-# Temporal split                                                              #
-# --------------------------------------------------------------------------- #
+# Temporal split
 
 
 @pytest.fixture
@@ -417,9 +399,7 @@ def test_temporal_split_does_not_shuffle(windowed_table):
     assert train["as_of"].is_monotonic_increasing
 
 
-# --------------------------------------------------------------------------- #
-# Forward-chaining cross-validation                                           #
-# --------------------------------------------------------------------------- #
+# Forward-chaining cross-validation
 
 
 def test_forward_chaining_yields_requested_number_of_folds():

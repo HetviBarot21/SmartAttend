@@ -1,20 +1,7 @@
 /**
- * Server-side absenteeism risk. Two scorers, same as the client
- * (client/src/lib/riskModel.js):
- *   - `scoreRisk` - the original transparent rule-based scorer. Kept as a
- *     fallback/reference.
- *   - `assessStudent` - the real trained model (HistGradientBoosting, 11
- *     features, F1 0.480/0.484 vs the rule-based scorer's 0.350/0.342 - see
- *     ml/results/evaluation_report.json). This is what `getFlaggedStudents`
- *     (db/repository.js) actually calls now. `data/riskModel.json` is the
- *     model's tree ensemble exported to plain arrays
- *     (ml/training/export_model.py) and walked here with ordinary
- *     arithmetic - no Python runtime needed server-side either. Re-export
- *     and copy that file over whenever the model is retrained.
- *
- * Deliberately duplicated from the client rather than shared - client and
- * server already mirror each other's domain logic throughout this codebase
- * (see e.g. client/src/db/database.js vs db/repository.js).
+ * Server-side absenteeism risk, mirroring client/src/lib/riskModel.js.
+ * `assessStudent` runs the trained model in `data/riskModel.json`; re-export it
+ * with ml/training/export_model.py whenever the model is retrained.
  */
 
 import { readFileSync } from 'node:fs';
@@ -34,7 +21,7 @@ const AMBER_THRESHOLD = 0.35;
 const RED_THRESHOLD = 0.6;
 const OVERRIDE_STREAK = 5;
 
-/** A flag is "fresh" (no new follow-up needed yet) if logged within this many days. */
+/** A follow-up counts as recent for this many days. */
 export const FOLLOW_UP_FRESH_DAYS = 14;
 
 /** Minimum recorded school days before a flag is shown at all. */
@@ -161,13 +148,9 @@ export function scoreRisk(f) {
   return { score, flag, dropoutProbability, overridden };
 }
 
-// --------------------------------------------------------------------------- //
-// trained model                                                               //
-// --------------------------------------------------------------------------- //
+// Trained model
 
-// Same source and same caveat as the client copy: only 2026 is defined, and
-// this needs updating by hand at the start of each school year (it's 3 short
-// entries) - ml/training/kenya_calendar.json is the source of truth.
+// Kenya term dates, copied from ml/training/kenya_calendar.json. Update every school year.
 const KENYA_TERMS = [
   { name: 'Term 1 2026', start: '2026-01-05', end: '2026-04-03' },
   { name: 'Term 2 2026', start: '2026-05-04', end: '2026-08-07' },
@@ -178,11 +161,7 @@ function termContaining(asOf) {
   return KENYA_TERMS.find((t) => t.start <= asOf && asOf <= t.end) ?? null;
 }
 
-/**
- * The 4 features beyond the original 7. fee/health absence rate always come
- * back 0 - this server has no absence-reason data (no such column exists),
- * same "no reason data ⇒ 0, not nan" convention the training pipeline uses.
- */
+/** The 4 extra model features. No absence reasons are stored, so fee and health rates are 0. */
 export function computeMlExtraFeatures(history, asOf = toISO(new Date())) {
   const byDate = new Map(history.map((r) => [r.date, r.status]));
   const term = termContaining(asOf);
@@ -233,7 +212,7 @@ export function scoreRiskFromFeatures(allFeatures) {
   return { score: dropoutProbability, flag, dropoutProbability, overridden: false };
 }
 
-/** Score one student's history in a single call, using the trained model. Returns null if not assessable. */
+/** Returns null when there is not enough history to assess. */
 export function assessStudent(history, asOf = toISO(new Date())) {
   if (!isAssessable(history)) return null;
   const features = computeFeatures(history, asOf);

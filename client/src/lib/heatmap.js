@@ -1,8 +1,7 @@
 /**
- * Weekly attendance grid for the Heatmap screen. Pure — no React, no Dexie —
- * so it can be unit-tested and reused in a worker. Shares the "school day =
- * Mon–Fri, missing record ⇒ absent, present+late ⇒ attended" conventions with
- * lib/riskModel.js and the Python pipeline.
+ * Weekly attendance grid for the Heatmap screen. Uses the same conventions as
+ * lib/riskModel.js: school days are Mon-Fri, a missing record is an absence,
+ * and late counts as attended.
  */
 
 import { toISO, isSchoolDay } from './riskModel';
@@ -28,7 +27,7 @@ export function startOfWeek(iso = toISO(new Date())) {
   return addDays(iso, -backToMonday);
 }
 
-/** The five school days (Mon–Fri) of the week starting at `weekStartISO`. */
+/** The five school days of the week starting at `weekStartISO`. */
 export function schoolWeek(weekStartISO) {
   const days = [];
   for (let i = 0; i < 7 && days.length < 5; i += 1) {
@@ -51,8 +50,7 @@ export function buildWeeklyHeatmap(students, records, weekStartISO, today = toIS
   const rows = students.map((student) => {
     const cells = days.map((day) => {
       const status = byKey.get(`${student.studentId}|${day.date}`) ?? null;
-      // Future days, and today until it has been marked, are "not yet graded" —
-      // they must not read as absences or drag down the weekly rate.
+      // Future days, and today until marked, do not count as absences.
       const pending = day.date > today || (day.date === today && status == null);
       return {
         date: day.date,

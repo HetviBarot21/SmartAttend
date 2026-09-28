@@ -19,9 +19,9 @@ ml/
 │   ├── train.py                 load -> label -> split -> train (RF / LogReg / rule-based) -> report
 │   ├── tune.py                  RandomizedSearchCV + ForwardChainingCV over RF and HistGradientBoosting
 │   └── export_model.py          walks the tuned model's trees into a plain-JSON asset for the JS runtime
-├── tests/                    33 pytest tests over the feature/label/split logic
-├── data/                     gitignored — cached supervised_*.pkl (slow to rebuild)
-├── models/                   gitignored — trained model .pkl files
+├── tests/                    pytest tests over the feature/label/split logic
+├── data/                     gitignored: cached supervised_*.pkl (slow to rebuild)
+├── models/                   gitignored: trained model .pkl files
 └── results/
     ├── evaluation_report.json   RF vs LogReg vs rule-based, on real SCH-01/SCH-02 data
     └── tuning_report.json       best_params + CV/holdout metrics per tuned model
@@ -38,9 +38,9 @@ scheduled school day counts as absent.
 
 ## Current model
 
-Tuned `HistGradientBoostingClassifier` (`max_leaf_nodes=7`, 210 trees) —
-chosen over the also-tuned Random Forest because its trees are tiny by
-construction, keeping the exported asset small enough to ship in the PWA.
+Tuned `HistGradientBoostingClassifier` (`max_leaf_nodes=7`, 210 trees). It was
+chosen over the tuned Random Forest because its small trees keep the exported
+model small enough to ship in the PWA.
 
 | eval set | precision | recall | F1 | AUC |
 |---|---|---|---|---|
@@ -56,7 +56,7 @@ Full params and both untuned baselines (RF, LogReg, rule-based) are in
 cd ml
 python -m venv venv && ./venv/Scripts/python.exe -m pip install -r requirements.txt
 
-# tests (33 pass)
+# tests
 ./venv/Scripts/python.exe -m pytest tests/ -q
 
 # train the baseline RF/LogReg/rule-based models (~19 min, needs SCH-01/SCH-02 xlsx)
@@ -71,12 +71,9 @@ python -m venv venv && ./venv/Scripts/python.exe -m pip install -r requirements.
 
 `export_model.py` writes `client/src/data/riskModel.json` and
 `server/src/data/riskModel.json`, which `riskModel.js` on each side walks
-with plain arithmetic (`scoreRiskML`) — no Python service call needed at
-runtime, so risk scoring still works fully offline.
+with plain arithmetic (`scoreRiskML`), so risk scoring works fully offline.
 
 ## Not yet done
 
-- **SHAP-based explainability** — scores are produced, but there's no
-  per-prediction "why" (e.g. top contributing features for one student).
-  The current export only carries the tree structure, not SHAP values.
-- Real Cognito wiring is separate (see `client/src/auth/`), unrelated to this pipeline.
+- **SHAP-based explainability**: there is no per-student explanation of a
+  score yet. The export only carries the tree structure.

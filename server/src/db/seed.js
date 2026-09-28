@@ -1,9 +1,4 @@
-// Demo roster for the Friday simulation.
-//
-// Deliberately identical to the client's seed (client/src/db/seedData.js):
-// same school, class and student IDs, so a record created by the RFID
-// simulation here and a record created by the teacher in the PWA describe the
-// same student and can be reconciled during sync.
+// Demo roster. Uses the same IDs as client/src/db/seedData.js so records sync.
 import { openDatabase } from './index.js';
 import { config } from '../config.js';
 
@@ -21,8 +16,7 @@ export const DEMO_CLASS = {
   academic_year: 2026,
 };
 
-// student_id matches the client; card_uid is a 4-byte hex UID like a real
-// MIFARE Classic card. The simulation only ever emits UIDs from this list.
+// 4-byte hex UIDs, like a MIFARE Classic card.
 export const DEMO_STUDENTS = [
   { student_id: 'stu-form3b-001', admission_no: '3B/001', full_name: 'Amina Wanjiru',   card_uid: '04A1B2C3' },
   { student_id: 'stu-form3b-002', admission_no: '3B/002', full_name: 'Brian Kamau',     card_uid: '04D4E5F6' },
@@ -36,11 +30,7 @@ export const DEMO_STUDENTS = [
   { student_id: 'stu-form3b-010', admission_no: '3B/010', full_name: 'Naomi Waweru',    card_uid: '0478DEF0' },
 ].map((s) => ({ ...s, class_group_id: DEMO_CLASS.class_group_id, enrolled_at: '2026-01-06' }));
 
-/**
- * Idempotent seed - uses INSERT OR IGNORE / UPDATE so re-running against an
- * already-seeded database repairs it instead of throwing on the primary key.
- * Attendance, challenges and the sync queue are never touched.
- */
+/** Safe to re-run. Does not touch attendance or the sync queue. */
 export function seed(db) {
   const tx = db.transaction(() => {
     db.prepare(
@@ -80,7 +70,6 @@ export function seed(db) {
   };
 }
 
-/** The card UIDs the RFID emitter is allowed to fire. */
 export const DEMO_CARD_UIDS = DEMO_STUDENTS.map((s) => s.card_uid);
 
 // Run directly: node src/db/seed.js

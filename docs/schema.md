@@ -1,12 +1,10 @@
-# Data model — Tier 2 backend (SQLite)
+# Data model: Tier 2 backend (SQLite)
 
 Canonical definition: `server/src/db/schema.sql`. This document explains it.
 
-The schema is fresh (designed server-side, not generated from the client) but it
-deliberately reuses the client's identifiers — `school-kibera-001`,
-`class-form3b-001`, `stu-form3b-001…010` — so a record created by the RFID
-simulation and a record created by the teacher in the PWA describe the same
-student and can be reconciled when sync is built.
+The schema reuses the client's identifiers (`school-kibera-001`,
+`class-form3b-001`, `stu-form3b-001…010`), so a record from the RFID simulation
+and one from the PWA refer to the same student.
 
 Conventions: `snake_case`, real `FOREIGN KEY`s (`PRAGMA foreign_keys = ON`),
 `CHECK` constraints on enums, timestamps as SQLite `TEXT` (`datetime('now')`),
@@ -25,12 +23,10 @@ Top of the roster hierarchy.
 ### 3. `students`
 `student_id` (PK, text), `class_group_id` (FK → class_groups), `admission_no`,
 `full_name`, `enrolled_at`, `active` (0/1).
-Contextual columns for risk scoring (fee status, repetition, guardian, distance)
-are **not** here yet — they get added when the ML work starts. `attendance_events`
-is kept append-only so the history they'd train on is preserved.
+`attendance_events` is append-only so the full history is kept.
 
 ### 4. `rfid_cards`
-`card_uid` (PK, text — the physical card's UID), `student_id` (FK → students),
+`card_uid` (PK, text, the physical card's UID), `student_id` (FK → students),
 `issued_at`, `active` (0/1).
 Partial unique index `idx_rfid_one_active_card` enforces **one active card per
 student**; a re-issued card keeps the old row with `active = 0`.
@@ -41,21 +37,19 @@ The append-only attendance log.
 | column | notes |
 |---|---|
 | `id` | int PK autoincrement |
-| `event_id` | text, **UNIQUE** — device-generated idempotency key; matches the client's `eventId` |
+| `event_id` | text, **UNIQUE**. Device-generated idempotency key; matches the client's `eventId` |
 | `student_id` | FK → students |
 | `date` | `YYYY-MM-DD`, school-local |
 | `status` | `present` \| `absent` \| `late` |
 | `capture_method` | `manual` \| `rfid` \| `fingerprint` \| `import` |
-| `verified` | 0/1 — 1 when a fingerprint challenge passed |
+| `verified` | 1 when a fingerprint challenge passed, else 0 |
 | `recorded_by` | teacher username, or `NULL` for hardware |
 | `source` | `simulation` \| `client` \| `manual` |
 | `created_at` | timestamp |
 | `synced_at` | timestamp, set by `syncWorker.js` once AWS confirms the row; `NULL` until then |
 
-**`UNIQUE (student_id, date)`** — one record per student per day. This is the
-duplicate-prevention guarantee; it is enforced by the database, not by
-application checks. Together with the unique `event_id` it makes re-delivered
-scans safe.
+**`UNIQUE (student_id, date)`** allows one record per student per day. Together
+with the unique `event_id`, the database itself blocks duplicate scans.
 
 ### 6. `fingerprint_challenges`
 Every biometric challenge the handler raises, pass or fail.
@@ -64,8 +58,8 @@ Every biometric challenge the handler raises, pass or fail.
 **nullable**), `result` (`match` \| `no_match`), `success_rate` (the configured
 rate at challenge time), `challenged_at`.
 
-A `no_match` row with `event_id IS NULL` is a **rejected scan** — no attendance
-was written. This is the buddy-punching audit trail.
+A `no_match` row with `event_id IS NULL` is a **rejected scan**: no attendance
+was written.
 
 ### 7. `sync_queue`
 One row per `attendance_event` that still has to reach AWS. Drained by
@@ -76,7 +70,7 @@ One row per `attendance_event` that still has to reach AWS. Drained by
 | `id` | int PK autoincrement |
 | `event_id` | FK → attendance_events, **UNIQUE** |
 | `payload` | JSON snapshot POSTed to the sync Lambda (matches `attendanceSync.schema.js`); `NULL` for legacy rows, which the worker rebuilds from `attendance_events` |
-| `status` | `pending` \| `synced` \| `failed` (4xx — retry won't help) \| `dead` (retryable, but `SYNC_MAX_ATTEMPTS` exhausted) |
+| `status` | `pending` \| `synced` \| `failed` (4xx, retrying won't help) \| `dead` (`SYNC_MAX_ATTEMPTS` used up) |
 | `attempt_count` | POST attempts made so far |
 | `next_attempt_at` | ISO; `NULL` = eligible now. Set by exponential backoff after a retryable failure |
 | `last_error` | last failure reason, for debugging |
@@ -99,5 +93,5 @@ Standalone traceability log. `id`, `action` (e.g. `attendance.recorded`,
 | `syncQueue` | `sync_queue` |
 | `auditLog` | `audit_log` |
 | `riskScores` | *deferred* |
-| — | `rfid_cards`, `fingerprint_challenges` (hardware simulation) |
+| (none) | `rfid_cards`, `fingerprint_challenges` (hardware simulation) |
 | `pinCredentials`, `authState` | *client-only (offline auth)* |

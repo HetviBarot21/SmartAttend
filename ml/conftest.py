@@ -1,6 +1,4 @@
-"""Pytest bootstrap: put ml/training on sys.path so tests can import the
-feature-engineering modules directly (feature_engineering, compute_labels,
-temporal_split)."""
+"""Put ml/training on sys.path for the tests."""
 
 import sys
 from pathlib import Path

@@ -11,7 +11,7 @@ import {
 import Avatar from './Avatar';
 import { AlertTriangleIcon, ArrowRightIcon, PhoneIcon, MailIcon } from './icons';
 
-const HISTORY_DAYS = 63; // 9 weeks — enough for the 6-week trend + 4-week windows
+const HISTORY_DAYS = 63; // covers the 6-week trend and the feature windows
 
 function daysAgoISO(n) {
   const dt = new Date();

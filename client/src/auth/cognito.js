@@ -7,22 +7,16 @@ import {
 import { db, LOCAL_SCHOOL_ID } from '../db/database';
 
 /**
- * Amazon Cognito authentication with a local fallback.
- *
- * Sprint 1 runs before the Cognito user pool is provisioned (Sprint 2), so
- * when no pool is configured this module issues a LOCAL session instead of
- * failing closed. That session is clearly marked mode:'local', is never
- * accepted by the AWS API Gateway authoriser, and exists only so the offline
- * PWA is demonstrable end to end. Setting VITE_COGNITO_USER_POOL_ID and
- * VITE_COGNITO_CLIENT_ID switches the whole module to real Cognito with no
- * other code change.
+ * Amazon Cognito authentication. Without VITE_COGNITO_USER_POOL_ID and
+ * VITE_COGNITO_CLIENT_ID it issues local sessions (mode: 'local') that AWS
+ * never accepts.
  */
 
 const USER_POOL_ID = import.meta.env?.VITE_COGNITO_USER_POOL_ID ?? '';
 const CLIENT_ID = import.meta.env?.VITE_COGNITO_CLIENT_ID ?? '';
 
 export const SESSION_KEY = 'session';
-const LOCAL_TOKEN_TTL_MS = 60 * 60 * 1000; // matches the 1-hour Cognito ID token expiry
+const LOCAL_TOKEN_TTL_MS = 60 * 60 * 1000;
 
 export function isCognitoConfigured() {
   return Boolean(USER_POOL_ID && CLIENT_ID);
@@ -45,7 +39,7 @@ export class AuthError extends Error {
   }
 }
 
-/** Read a JWT payload without verifying it. Verification is the API Gateway authoriser's job. */
+/** Reads a JWT payload without verifying it. */
 export function decodeJwt(token) {
   try {
     const payload = token.split('.')[1];
@@ -67,7 +61,6 @@ function sessionFromCognito(cognitoSession, username) {
     roles: claims['cognito:groups'] ?? ['teacher'],
     idToken: idToken.getJwtToken(),
     refreshToken: cognitoSession.getRefreshToken().getToken(),
-    // Cognito exp is in seconds.
     expiresAt: claims.exp * 1000,
     issuedAt: Date.now()
   };
@@ -82,10 +75,7 @@ function localSession(username, displayName, role = 'teacher', schoolName = null
     displayName: displayName || username,
     roles: [role],
     role,
-    // Local mode is single-school (no server-side identity system - see
-    // PROJECT_CONTEXT.md). Every device shares LOCAL_SCHOOL_ID so an admin's
-    // cross-class reports and a teacher's roster pushes land in the same
-    // school row server-side.
+    // Local mode is single-school.
     schoolId: LOCAL_SCHOOL_ID,
     schoolName: schoolName || null,
     idToken: null,
@@ -95,14 +85,7 @@ function localSession(username, displayName, role = 'teacher', schoolName = null
   };
 }
 
-/**
- * Local-mode account profiles. Before the Cognito pool exists (Sprint 2) there
- * is no server to hold a teacher's name, so "sign up" just records a display
- * name, role and (for admins) school name on the device, keyed by email, in
- * the same IndexedDB table the session lives in. It is not a credential store
- * - local mode still accepts any password - it only lets the app greet the
- * teacher by name and restore their role on the next sign-in.
- */
+// Local-mode profiles (name, role, school) keyed by email. No passwords are stored.
 const accountKey = (email) => `account:${String(email).trim().toLowerCase()}`;
 
 async function saveLocalAccount(email, displayName, role = 'teacher', schoolName = null) {
@@ -130,7 +113,6 @@ async function persist(session) {
 }
 
 /**
- * Authenticate against Cognito, or mint a local session when no pool is configured.
  * @throws {AuthError} NOT_AUTHORIZED | NEW_PASSWORD_REQUIRED | NETWORK
  */
 export async function signIn(username, password) {
@@ -167,17 +149,10 @@ export async function signIn(username, password) {
 }
 
 /**
- * Register a new teacher.
+ * Local mode signs in straight away. Cognito mode emails a code that must be
+ * passed to confirmSignUp().
  *
- * Local mode (no pool): records the display name on the device and signs in
- * immediately - there is nothing to confirm. Returns `{ needsConfirmation: false,
- * session }`.
- *
- * Cognito mode: calls the pool's sign-up, which emails a verification code.
- * Returns `{ needsConfirmation: true, username }`; the caller then collects the
- * code and calls confirmSignUp() before the account can sign in.
- *
- * @param {'teacher'|'admin'|'system_admin'} [role] local mode only - Cognito mode derives role from `cognito:groups`
+ * @param {'teacher'|'admin'|'system_admin'} [role] local mode only
  * @throws {AuthError} INVALID_INPUT | NETWORK | SIGNUP_FAILED
  */
 export async function signUp({ name, email, password, role = 'teacher', schoolName = null }) {
@@ -222,14 +197,12 @@ export async function signUp({ name, email, password, role = 'teacher', schoolNa
 }
 
 /**
- * Confirm a Cognito sign-up with the emailed code, then sign in so the teacher
- * lands in the app straight away.
+ * Confirm a Cognito sign-up with the emailed code, then sign in.
  * @throws {AuthError} INVALID_INPUT | NETWORK | CONFIRM_FAILED
  */
 export async function confirmSignUp(username, code, password) {
   const pool = userPool();
   if (!pool) {
-    // Local mode never issues a confirmation step.
     return signIn(username, password);
   }
   if (!username || !code) {
@@ -252,7 +225,6 @@ export async function confirmSignUp(username, code, password) {
   return null;
 }
 
-/** Re-send the Cognito sign-up verification code. No-op in local mode. */
 export async function resendConfirmationCode(username) {
   const pool = userPool();
   if (!pool) return;
@@ -265,17 +237,11 @@ export async function resendConfirmationCode(username) {
   });
 }
 
-/** The last session written to IndexedDB, valid or expired. */
 export async function loadStoredSession() {
   return (await db.authState.get(SESSION_KEY)) ?? null;
 }
 
-/**
- * Extend the session after a PIN unlock. The teacher has proved possession of
- * the device, but not to AWS - so a PIN-extended session stays flagged
- * pinVerified and holds no fresh ID token. Sprint 2's sync engine treats it as
- * unauthenticated for AWS purposes and re-authenticates once online.
- */
+/** Extend the session after a PIN unlock. This does not refresh the AWS token. */
 export async function extendSessionWithPin(session, now = Date.now()) {
   return persist({
     ...session,
@@ -295,11 +261,7 @@ export async function signOut() {
   await db.authState.delete(SESSION_KEY);
 }
 
-/**
- * Demo helper: backdate the stored session so it reads as expired.
- * Drives the "PIN login works after JWT expiry" step of the Sprint 1 demo
- * without waiting an hour. Exposed in dev builds only.
- */
+/** Dev helper: mark the stored session as expired. */
 export async function expireSessionNow() {
   const session = await loadStoredSession();
   if (!session) return null;

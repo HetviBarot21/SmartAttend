@@ -1,22 +1,13 @@
 'use strict';
 
 /**
- * AWS Lambda - red-flag guardian/teacher notifications.
+ * AWS Lambda: notifications for red-flagged students. Run on a schedule.
  *
- * Trigger: scheduled (EventBridge cron, e.g. once a school-day morning) or
- * manual invoke.
+ * For each red row in RISK_SCORES_TABLE not yet notified (NOTIFY_RESEND=true
+ * re-sends), SMS the parent via Africa's Talking and email the teacher via SES,
+ * then stamp notifiedAt if every attempted channel succeeded.
  *
- * Flow:
- *   1. Scan RISK_SCORES_TABLE for items with flagLevel === 'red' (by default
- *      only those not yet notified - set NOTIFY_RESEND=true to re-send).
- *   2. For each student:
- *        - SMS the parent (parentPhone) via Africa's Talking,
- *        - email the teacher (teacherEmail) via SES with the student name,
- *          attendance rate, risk score and top three contributing features.
- *   3. Stamp notifiedAt on the row when both channels that were attempted
- *      succeeded.
- *
- * Expected RISK_SCORES_TABLE item shape (written by the Sprint 4 risk engine):
+ * RISK_SCORES_TABLE item shape:
  *   {
  *     studentId, studentName, attendanceRate (0..1), totalScore (number),
  *     flagLevel: 'green' | 'amber' | 'red',
@@ -26,16 +17,10 @@
  *   }
  *   Partition key: studentId (S)
  *
- * ---------------------------------------------------------------------------
- * LOCAL MODE: while AWS_ACCESS_KEY_ID is unset/"placeholder" (or
- * NOTIFY_DRY_RUN=true) the handler reads from DynamoDB Local and *logs* the SMS
- * and email payloads instead of calling Africa's Talking / SES, and does not
- * stamp notifiedAt. When credentials arrive: give the Lambda a role with
- * ses:SendEmail + dynamodb access, set real AT_API_KEY / AT_USERNAME, verify
- * SES_FROM_ADDRESS in SES, and drop AWS_ACCESS_KEY_ID + DYNAMODB_ENDPOINT.
- * (SES is not available in af-south-1 - set SES_REGION to a supported region
- * such as eu-west-1.)
- * ---------------------------------------------------------------------------
+ *
+ * Local mode (AWS_ACCESS_KEY_ID unset or "placeholder", or NOTIFY_DRY_RUN=true)
+ * logs the SMS and email instead of sending them. SES is not available in
+ * af-south-1, so set SES_REGION to a supported region such as eu-west-1.
  */
 
 const { ScanCommand, UpdateCommand } = require('@aws-sdk/lib-dynamodb');
@@ -50,8 +35,7 @@ const RESEND = process.env.NOTIFY_RESEND === 'true';
 const ddb = createDocClient();
 const ses = new SESClient({ region: process.env.SES_REGION || process.env.AWS_REGION || 'eu-west-1' });
 
-// --- formatting ----------------------------------------------------------
-
+// formatting
 const FEATURE_LABELS = {
   attendance_rate_w1: 'attendance, last 2 weeks',
   attendance_rate_w2: 'attendance, weeks 3-4 back',
@@ -130,8 +114,7 @@ function emailBodies(student, features) {
   return { text, html };
 }
 
-// --- channels ----------------------------------------------------------
-
+// channels
 async function sendSms(to, message) {
   if (DRY_RUN) {
     console.log('[notify][dry-run] SMS', { to, message });
@@ -184,8 +167,7 @@ async function sendEmail(to, student, features) {
   return { ok: true };
 }
 
-// --- data ------------------------------------------------------------
-
+// data
 async function fetchRedFlags() {
   const items = [];
   let ExclusiveStartKey;
@@ -219,8 +201,7 @@ async function markNotified(studentId, channels) {
   );
 }
 
-// --- handler ---------------------------------------------------------
-
+// handler
 exports.handler = async () => {
   const students = await fetchRedFlags();
   console.log(`[notify] ${students.length} red-flag student(s)${DRY_RUN ? ' (dry run)' : ''}`);
@@ -263,7 +244,6 @@ exports.handler = async () => {
       summary.skipped.push({ studentId: student.studentId, reason: 'no teacherEmail' });
     }
 
-    // Only close the row out if every channel we tried actually went through.
     if (attempted.length > 0 && attempted.length === succeeded.length) {
       try {
         await markNotified(student.studentId, succeeded);
@@ -277,5 +257,4 @@ exports.handler = async () => {
   return summary;
 };
 
-// Exported for unit testing.
 exports._internals = { topThreeFeatures, smsBody, emailBodies, pct };

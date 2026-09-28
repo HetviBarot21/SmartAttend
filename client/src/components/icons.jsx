@@ -1,8 +1,4 @@
-/**
- * Inline SVG icons. A PWA that must work offline can't pull an icon font or a
- * CDN sprite, and the set we need is small, so each icon is a tiny component.
- * All of them inherit `currentColor` and take an optional `size` (px).
- */
+/** Inline SVG icons. They use `currentColor` and take an optional `size` in px. */
 
 function Svg({ size = 20, children, ...rest }) {
   return (

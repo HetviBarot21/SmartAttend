@@ -1,17 +1,7 @@
 /**
- * Outbound roster sync - pushes schools/classes/students/cards created or
- * edited on this device to the server's shared roster tables
- * (server/src/routes/roster.js), so a central admin's cross-class reports
- * (server/src/routes/admin.js) see them too.
- *
- * Mirrors services/syncService.js's role for attendance, but deliberately
- * simpler: roster writes are low-volume (a teacher adds a handful of students
- * a week, not hundreds of scans a day), so there is no batching or exponential
- * backoff here - just "try the queue in order on reconnect, stop at the first
- * failure." Stopping (rather than skipping past a failed row) matters because
- * later rows can depend on an earlier one landing first - a class push needs
- * its school row to exist, a student push needs its class - and
- * `db/database.js` enqueues them in that dependency order already.
+ * Pushes roster changes made on this device to the server. Rows are sent in
+ * order and the drain stops at the first failure, because later rows can
+ * depend on earlier ones (a student needs its class).
  */
 
 import { db } from '../db/database';
@@ -19,7 +9,6 @@ import { db } from '../db/database';
 let inFlight = null;
 
 /**
- * Drain every `pending`/`failed` rosterSyncQueue row, oldest first.
  * @returns {Promise<{attempted:number, synced:number, failed:number}>}
  */
 export function drainRosterQueue(opts = {}) {
@@ -52,7 +41,7 @@ async function runDrain({ fetchImpl = globalThis.fetch } = {}) {
         status: 'failed', attemptCount: (row.attemptCount ?? 0) + 1, lastError: err?.message ?? 'network error',
       });
       summary.failed += 1;
-      break; // almost certainly offline - the rest stay pending for the next reconnect
+      break; // probably offline
     }
 
     if (!response.ok) {
@@ -60,7 +49,7 @@ async function runDrain({ fetchImpl = globalThis.fetch } = {}) {
         status: 'failed', attemptCount: (row.attemptCount ?? 0) + 1, lastError: `roster endpoint responded ${response.status}`,
       });
       summary.failed += 1;
-      break; // a later row may depend on this one - don't skip ahead
+      break; // later rows may depend on this one
     }
 
     await db.rosterSyncQueue.update(row.id, { status: 'synced', syncedAt: new Date().toISOString(), lastError: null });
@@ -70,16 +59,13 @@ async function runDrain({ fetchImpl = globalThis.fetch } = {}) {
   return summary;
 }
 
-/** Drain now if there's a fetch available (i.e. running in a browser-like environment). */
 export async function requestRosterSync() {
   if (typeof globalThis.fetch !== 'function') return;
   await drainRosterQueue().catch(() => {});
 }
 
 /**
- * Wire the page to push queued roster changes whenever connectivity is
- * restored, and once now in case the app launched online with a backlog.
- * Call from main.jsx, alongside startSyncOnReconnect().
+ * Push roster changes on every reconnect, and once now if online.
  * @returns {() => void} an unsubscribe function
  */
 export function startRosterSyncOnReconnect() {

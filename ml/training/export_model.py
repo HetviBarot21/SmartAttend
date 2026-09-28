@@ -1,26 +1,16 @@
 #!/usr/bin/env python
 """Export the trained HistGradientBoosting model to portable JSON for JS.
 
-The app is offline-first (a teacher on a phone with no signal still needs
-risk flags), so "wire the model into the app" cannot mean a live inference
-API call - it means shipping the model's decision logic as a static asset
-both the client PWA and the server can walk with plain arithmetic, no
-Python runtime involved. HistGB was chosen for exactly this over the tuned
-Random Forest: its trees are tiny by construction (max_leaf_nodes=7 during
-tuning), so the whole 161-tree ensemble exports to well under a couple
-hundred KB of JSON - trivial to bundle.
+The app works offline, so the client and server walk these trees in plain JS.
 
-Algorithm this JSON supports (verified against model._raw_predict /
-predict_proba on real samples before trusting this export - see the
-commit message for the check):
+How the JSON is evaluated:
 
     raw = baseline
     for each tree:
         walk from node 0: if not leaf, go to `left` when
           (value <= threshold), or when the feature is NaN and
           `missingLeft` is true; otherwise go `right`. Repeat until a leaf.
-        raw += leaf's `value` (already learning-rate-scaled - do NOT
-          multiply by a learning rate again)
+        raw += leaf's `value` (already scaled by the learning rate)
     probability = sigmoid(raw)
     flag = 'red' if probability >= threshold, else 'amber' if probability
       >= threshold * AMBER_FRACTION, else 'green'  (see export below)
@@ -38,9 +28,6 @@ import numpy as np
 ML_DIR = Path(__file__).resolve().parent.parent
 REPO_ROOT = ML_DIR.parent
 
-# Same amber/red split style as the existing rule-based scorer (red >=0.6,
-# amber >=0.35 of red's threshold) - keeps the UI's two-tier severity language
-# consistent even though the underlying score now comes from a real model.
 AMBER_FRACTION = 0.35 / 0.60
 
 
@@ -75,8 +62,7 @@ def main() -> int:
         "trees": trees,
     }
 
-    # Sanity-check the export against the live model before writing anything -
-    # a silently-wrong port is worse than no port at all.
+    # Check the export against the live model before writing it.
     rng = np.random.default_rng(42)
     import pandas as pd
 

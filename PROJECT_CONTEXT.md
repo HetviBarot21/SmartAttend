@@ -1,4 +1,4 @@
-# SmartAttend AI — project context
+# SmartAttend AI: project context
 
 > Hand this to Claude at the start of a session so it knows what already exists.
 > Last compiled: 2026-09-08 from the `hetvi/tier1-pwa` branch.
@@ -17,8 +17,8 @@ persistent absenteeism so staff can follow up.
 
 | Dir | Tier | Stack | State |
 |---|---|---|---|
-| `client/` | Tier 1 — teacher PWA | React 19, Vite 8, Dexie/IndexedDB, Workbox, Jest | Working, demoable end to end |
-| `server/` | Tier 2 — simulated school-gate backend | Node (ESM), Express 4, better-sqlite3, `node --test` | Working, 39 tests pass |
+| `client/` | Tier 1: teacher PWA | React 19, Vite 8, Dexie/IndexedDB, Workbox, Jest | Working, demoable end to end |
+| `server/` | Tier 2: simulated school-gate backend | Node (ESM), Express 4, better-sqlite3, `node --test` | Working, 39 tests pass |
 | `ml/` | ML pipeline | Python 3, scikit-learn, pandas, pytest (venv at `ml/venv`) | Feature pipeline + first training run done; models weak |
 | `aws/` | Cloud tier | Node CommonJS Lambdas, DynamoDB, SES, Africa's Talking | Code written, never deployed; runs against DynamoDB Local |
 
@@ -26,11 +26,11 @@ persistent absenteeism so staff can follow up.
 
 ## 2. Repo / branch layout
 
-- **`main`** — where the teammate "Benson" pushes (Tier 2 hardware simulation is his).
-- **`hetvi/tier1-pwa`** — the active feature branch, ahead of `origin/main`. All
+- **`main`**: where the teammate "Benson" pushes (Tier 2 hardware simulation is his).
+- **`hetvi/tier1-pwa`**: the active feature branch, ahead of `origin/main`. All
   Tier 1 PWA work, the ML pipeline, the cloud-sync pipeline, and the training
   script live here. **Merge `main` in when Benson pushes.** The first merge
-  (2026-09-04) collided badly on the server — resolved by taking Benson's server
+  (2026-09-04) collided badly on the server and was resolved by taking Benson's server
   wholesale (`-X theirs`) and re-porting the sync pipeline onto it.
 
 ### Commit history (this branch)
@@ -56,7 +56,7 @@ ae364b1 feat: AWS cloud sync pipeline (server route + worker, Lambdas, PWA queue
 
 ---
 
-## 3. File structure (source only — node_modules / venv / dist omitted)
+## 3. File structure (source only; node_modules / venv / dist omitted)
 
 ```
 SmartAttend/
@@ -67,7 +67,7 @@ SmartAttend/
 │   ├── README.md               (stub)
 │   └── schema.md               (full description of the Tier 2 SQLite schema)
 │
-├── client/                     TIER 1 — React PWA
+├── client/                     TIER 1: React PWA
 │   ├── index.html
 │   ├── vite.config.js          VitePWA injectManifest; dev proxy /api → :3000; global→globalThis shim
 │   ├── jest.config.cjs, babel.config.cjs, jest.setup.cjs, eslint.config.js
@@ -93,9 +93,9 @@ SmartAttend/
 │       ├── hooks/
 │       │   └── useOnlineStatus.js
 │       ├── lib/
-│       │   └── attendanceSummary.js   pure aggregation (no React/Dexie) — reused by dashboard, later by risk worker
+│       │   └── attendanceSummary.js   pure aggregation (no React/Dexie), reused by dashboard, later by risk worker
 │       ├── services/           ← UNTRACKED
-│       │   ├── syncService.js  drainSyncQueue() — the outbound drain half of the Tier 1 sync loop
+│       │   ├── syncService.js  drainSyncQueue(): the outbound drain half of the Tier 1 sync loop
 │       │   └── syncService.test.js
 │       ├── sw/
 │       │   ├── sw.js           custom service worker (injectManifest): precache + NetworkFirst API GET + sync queue
@@ -104,7 +104,7 @@ SmartAttend/
 │       │   └── syncQueue.js    Workbox BackgroundSyncPlugin + custom onSync replay + durable-queue sync tag
 │       └── pages/              (empty)
 │
-├── server/                     TIER 2 — Express + SQLite (ESM)
+├── server/                     TIER 2: Express + SQLite (ESM)
 │   ├── .env.example            all vars optional; defaults in src/config.js
 │   └── src/
 │       ├── server.js           entry: getDb→seed→createApp→listen; spawns syncWorker Worker; runs RfidEmitter
@@ -116,9 +116,9 @@ SmartAttend/
 │       │   ├── schema.sql      8 tables (see §6)
 │       │   ├── init.js, seed.js, repository.js (+ repository.test.js)
 │       ├── routes/
-│       │   └── sync.js         createSyncRouter({db}) — POST /api/sync ingest (+ sync.test.js)
+│       │   └── sync.js         createSyncRouter({db}): POST /api/sync ingest (+ sync.test.js)
 │       ├── attendance/
-│       │   └── handler.js      createCardHandler — card UID → student → (maybe fingerprint) → attendance row (+ test)
+│       │   └── handler.js      createCardHandler: card UID → student → (maybe fingerprint) → attendance row (+ test)
 │       ├── simulation/
 │       │   ├── rfidEmitter.js  emits 'card-detected' every RFID_INTERVAL_MS (+ test)
 │       │   └── fingerprintSimulator.js   probabilistic match (+ test)
@@ -138,14 +138,14 @@ SmartAttend/
 │   │   ├── feature_engineering.py   SchoolCalendar, compute_features(), compute_features_frame()
 │   │   ├── compute_labels.py        compute_label(), absence_rate_in_window(), build_training_table()
 │   │   ├── temporal_split.py        temporal_train_test_split(), ForwardChainingCV
-│   │   ├── kenya_calendar.json      2026 term dates + holidays (NOT used by train.py — data is 2017-2024)
+│   │   ├── kenya_calendar.json      2026 term dates + holidays (NOT used by train.py; the data is 2017-2024)
 │   │   └── train.py            ← UNTRACKED; orchestrates load→label→split→train 3 models→report
 │   ├── tests/test_features.py  33 pytest tests pass
 │   ├── data/                   ← UNTRACKED; cached supervised_*.pkl (gitignored)
 │   ├── models/                 rf_model.pkl (~80MB, gitignored)
 │   └── results/evaluation_report.json   ← UNTRACKED but meant to be versioned
 │
-└── aws/                        CLOUD TIER — Lambdas (CommonJS)
+└── aws/                        CLOUD TIER: Lambdas (CommonJS)
     ├── README.md               DynamoDB Local setup + go-live steps
     ├── package.json, fixtures/sync-event.json
     └── lambda/
@@ -158,7 +158,7 @@ SmartAttend/
 
 ---
 
-## 4. Tier 1 (client) — how it works
+## 4. Tier 1 (client): how it works
 
 > **2026-09-08 UI rebuild (uncommitted).** The PWA was rebuilt to match 5 wireframe
 > screens: slate/indigo theme, a bottom nav (Attendance / Heatmap / Alerts) plus a
@@ -168,25 +168,25 @@ SmartAttend/
 > `Dashboard.jsx` deleted. `index.css` fully rewritten. 38 Jest tests pass. The
 > auth / Dexie / sync internals below are unchanged.
 
-- **Auth:** `AuthContext` is a 4-state machine — `loading → signedOut → locked → ready`.
+- **Auth:** `AuthContext` is a 4-state machine: `loading → signedOut → locked → ready`.
   - `cognito.js` talks to Amazon Cognito **if** `VITE_COGNITO_USER_POOL_ID` +
     `VITE_COGNITO_CLIENT_ID` are set; otherwise it mints a `mode:'local'` session
     so the PWA is demoable before the pool exists (Sprint 2). Local/PIN sessions
     are never accepted by the AWS authoriser.
-  - `pin.js` — offline 4-digit PIN, bcrypt-hashed, enrolled only after an online
+  - `pin.js`: offline 4-digit PIN, bcrypt-hashed, enrolled only after an online
     login. 3 wrong attempts → 15-min lockout; counters persisted in IndexedDB so
     a reload doesn't reset them.
   - Dev-only "Simulate session expiry" button backdates the token to show the
     PIN-unlock path without waiting an hour.
 - **Data layer:** `db/database.js`, Dexie DB `SmartAttendDB`, **schema v2**.
-  - `attendanceEvents`: `&[studentId+date]` (UNIQUE — DB-enforced duplicate
-    prevention) and `&eventId` (UNIQUE — the sync idempotency key).
+  - `attendanceEvents`: `&[studentId+date]` (UNIQUE, DB-enforced duplicate
+    prevention) and `&eventId` (UNIQUE, the sync idempotency key).
   - `addAttendanceEvent()` writes the event + a `syncQueue` row
     (`status:'pending'`) + an `auditLog` row in **one transaction**.
   - Statuses: `present` / `absent` / `late`. `present`+`late` count as attendance.
   - Dates stored as `YYYY-MM-DD` local (`todayISO()` avoids the UTC shift).
-- **Sync — two cooperating queues:**
-  1. **Durable Dexie queue** (`syncQueue` table) — the source of truth the
+- **Sync uses two cooperating queues:**
+  1. **Durable Dexie queue** (`syncQueue` table): the source of truth the
      teacher sees ("N records awaiting sync"). Drained by
      **`services/syncService.js` → `drainSyncQueue()`**: reads pending/failed
      rows, joins each to its `attendanceEvents` row, POSTs batches of 100 to
@@ -196,12 +196,12 @@ SmartAttend/
      `inFlight` guard collapses concurrent triggers. Terminal server skip
      reasons (`duplicate_*`, `unknown_student`) → treated as `synced`; only
      `insert_error` retries.
-  2. **Workbox Background Sync queue** (`workers/syncQueue.js`) — a
+  2. **Workbox Background Sync queue** (`workers/syncQueue.js`): a
      transport-level net for POSTs that were already in flight when the network
      dropped. Its `onSync` replays queued requests **then** calls
      `drainSyncQueue()`. `registerDurableQueueSync()` adds a dedicated `sync`
      listener for the `smartattend-drain-sync` tag, because Workbox only
-     registers a sync event when a request actually failed into its queue — a
+     registers a sync event when a request actually failed into its queue. A
      device that only ever recorded offline needs the explicit tag.
   - `startSyncOnReconnect()` (from `main.jsx`) fires on `online` and once at
     launch. `requestBackgroundSync()` prefers the Background Sync API, falls back
@@ -211,7 +211,7 @@ SmartAttend/
   when `import.meta.env.DEV` (a leftover SW from a prior `vite build`/`preview`
   otherwise intercepts `/api` and breaks the dev proxy).
 - **UI:** single demo class (`class-form3b-001`, "Form 3 B", 10 students). Two
-  tabs — Roll call (`AttendanceForm`) and Dashboard.
+  tabs: Roll call (`AttendanceForm`) and Dashboard.
 - **Tests:** Jest. ~24 passing (16 before the sync-drain work + 8 in
   `syncService.test.js`). `npm test` in `client/`.
 
@@ -219,21 +219,21 @@ SmartAttend/
 - `src/sw/sw.js` + `src/workers/syncQueue.js` line 1 `/* eslint-env serviceworker */`
   → eslint 10 error "no longer supported". Pre-existing, not from the sync work.
 - Dev gotcha: a stale SW stuck in the browser intercepts `/api`. Fix = unregister
-  SW + delete Cache Storage only. **Do NOT "Clear site data"** — that wipes the
+  SW + delete Cache Storage only. **Do NOT "Clear site data"**: that wipes the
   IndexedDB sync queue.
-- All client sync URLs are **relative** (`/api/sync`). Never hardcode a host —
+- All client sync URLs are **relative** (`/api/sync`). Never hardcode a host;
   the Vite dev proxy forwards `/api` to `http://localhost:3000`.
 
 ---
 
-## 5. Tier 2 (server) — how it works
+## 5. Tier 2 (server): how it works
 
 - **ESM** Node, `type: "module"`. Entry `src/server.js`. `createApp({db})` uses
   dependency injection so tests pass `:memory:` DBs.
 - **RFID/fingerprint simulation** (Benson's): `RfidEmitter` fires a fake card
   scan every 5 s; `handler.js` resolves card UID → student, challenges ~25% for a
   fingerprint, writes `attendance_events` (`capture_method` `rfid`/`fingerprint`,
-  `source='simulation'`). A `no_match` writes nothing — just a
+  `source='simulation'`). A `no_match` writes nothing except a
   `fingerprint_challenges` row + audit (the buddy-punching trail).
 - **Inbound sync:** `POST /api/sync` (`routes/sync.js`). Validates the whole
   batch against `schemas/attendanceSync.schema.js`; dedupes each record on
@@ -243,7 +243,7 @@ SmartAttend/
   inserted, skipped}`. Skip reasons: `duplicate_event_id`,
   `duplicate_student_date`, `unknown_student` (FK fail), `duplicate_race`,
   `insert_error`.
-- **Outbound sync:** `workers/syncWorker.js` — a `worker_threads` Worker spawned
+- **Outbound sync:** `workers/syncWorker.js`: a `worker_threads` Worker spawned
   by `server.js`. Every `SYNC_POLL_INTERVAL_MS` (30 s) it drains `pending`
   `sync_queue` rows, POSTs batches of 50 to `SYNC_API_GATEWAY_URL`, marks
   confirmed rows `synced` + stamps `attendance_events.synced_at`. Retryable
@@ -254,11 +254,11 @@ SmartAttend/
   (`%LOCALAPPDATA%\smartattend\smartattend.db`) because this checkout is under
   OneDrive, which holds file handles and deadlocks SQLite's WAL. Override with
   `DB_PATH` only if your checkout is not in a syncing folder. `:memory:` in tests.
-- **`better-sqlite3` pinned `^13.0.3`** — it ships Node 25 / ABI 141 prebuilds;
+- **`better-sqlite3` pinned `^13.0.3`**: it ships Node 25 / ABI 141 prebuilds;
   Benson's `^11` does not → "bindings file not found".
 - **Tests:** `node --test src/**/*.test.js`, **39 passing**.
   - Agent-shell quirk: `npm test` / `npm install` fail ("'node' is not
-    recognized" — npm's spawned cmd.exe lacks node on PATH). Run `node` directly,
+    recognized", because npm's spawned cmd.exe lacks node on PATH). Run `node` directly,
     or `export PATH="/c/Program Files/node:$PATH"`. `npm install` needs
     `--ignore-scripts` in the agent shell (better-sqlite3 postinstall). All fine
     in the user's own PowerShell.
@@ -271,7 +271,7 @@ SmartAttend/
 | GET | `/api/attendance?date=YYYY-MM-DD` | records for a date |
 | GET | `/api/challenges?limit=50` | recent fingerprint challenges |
 | GET | `/api/stats?date=` | counts by capture method, challenge outcomes, pending sync |
-| POST | `/api/rfid/scan` | fire one scan — body `{ "cardUid": "04A1B2C3" }` |
+| POST | `/api/rfid/scan` | fire one scan, body `{ "cardUid": "04A1B2C3" }` |
 | POST | `/api/sync` | inbound attendance batch from the PWA |
 
 ### Quick start
@@ -281,29 +281,29 @@ cd server && npm install && npm run db:reset && npm start   # :3000, simulation 
 
 ---
 
-## 6. Tier 2 SQLite schema (8 tables) — `server/src/db/schema.sql`
+## 6. Tier 2 SQLite schema (8 tables): `server/src/db/schema.sql`
 
 `PRAGMA foreign_keys = ON`, snake_case, real FKs, CHECK'd enums, dates as
 `YYYY-MM-DD` text.
 
-1. **`schools`** — `school_id` PK, name, county
-2. **`class_groups`** — `class_group_id` PK, `school_id` FK, grade, stream, academic_year
-3. **`students`** — `student_id` PK, `class_group_id` FK, admission_no, full_name, enrolled_at, active
+1. **`schools`**: `school_id` PK, name, county
+2. **`class_groups`**: `class_group_id` PK, `school_id` FK, grade, stream, academic_year
+3. **`students`**: `student_id` PK, `class_group_id` FK, admission_no, full_name, enrolled_at, active
    - Risk-scoring context columns (fee status, repetition, guardian, distance)
-     deliberately **not here yet** — added when ML integration starts.
-4. **`rfid_cards`** — `card_uid` PK, `student_id` FK; partial unique index enforces
+     deliberately **not here yet**; they get added when ML integration starts.
+4. **`rfid_cards`**: `card_uid` PK, `student_id` FK; partial unique index enforces
    one active card per student
-5. **`attendance_events`** — append-only log. `id` PK; `event_id` **UNIQUE**
+5. **`attendance_events`**: append-only log. `id` PK; `event_id` **UNIQUE**
    (device idempotency key); `student_id` FK; `date`; `status`
    (present/absent/late); `capture_method` (manual/rfid/fingerprint/import);
    `verified` 0/1; `recorded_by`; `source` (simulation/client/manual);
    `created_at`; `synced_at` (set by syncWorker). **`UNIQUE(student_id, date)`**.
-6. **`fingerprint_challenges`** — every biometric challenge; `no_match` +
+6. **`fingerprint_challenges`**: every biometric challenge; `no_match` +
    `event_id IS NULL` = rejected scan
-7. **`sync_queue`** — one row per event to ship to AWS. `event_id` UNIQUE FK;
+7. **`sync_queue`**: one row per event to ship to AWS. `event_id` UNIQUE FK;
    `payload` (JSON snapshot, NULL for legacy rows → worker rebuilds); `status`
    (pending/synced/failed/dead); `attempt_count`; `next_attempt_at`; `last_error`
-8. **`audit_log`** — action / actor_id / record_id / detail(JSON) / timestamp
+8. **`audit_log`**: action / actor_id / record_id / detail(JSON) / timestamp
 
 ### Client Dexie ↔ server SQLite mapping
 | client (Dexie) | server (SQLite) |
@@ -313,7 +313,7 @@ cd server && npm install && npm run db:reset && npm start   # :3000, simulation 
 | `syncQueue` | `sync_queue` |
 | `auditLog` | `audit_log` |
 | `riskScores` | *deferred* |
-| — | `rfid_cards`, `fingerprint_challenges` |
+| (none) | `rfid_cards`, `fingerprint_challenges` |
 | `pinCredentials`, `authState` | *client-only (offline auth)* |
 
 The two rosters use **identical IDs** (`school-kibera-001`, `class-form3b-001`,
@@ -338,10 +338,10 @@ as_of+28d)`. Missing record on a scheduled school day = absent. Attendance rate
 is NaN only when a window has zero school days.
 
 **Pipeline modules (`ml/training/`):**
-- `feature_engineering.py` — `SchoolCalendar`, `compute_features()`, `compute_features_frame()`
-- `compute_labels.py` — `compute_label()`, `absence_rate_in_window()`, `build_training_table(events, calendar, step_days=14)`
-- `temporal_split.py` — `temporal_train_test_split(df, test_size|cutoff, gap)` (no shuffle), `ForwardChainingCV` (expanding-window, sklearn-compatible)
-- `kenya_calendar.json` — 2026 term dates; **not used by train.py** (data is 2017-2024; per-school calendar built from the xlsx `School Calendar` sheet instead)
+- `feature_engineering.py`: `SchoolCalendar`, `compute_features()`, `compute_features_frame()`
+- `compute_labels.py`: `compute_label()`, `absence_rate_in_window()`, `build_training_table(events, calendar, step_days=14)`
+- `temporal_split.py`: `temporal_train_test_split(df, test_size|cutoff, gap)` (no shuffle), `ForwardChainingCV` (expanding-window, sklearn-compatible)
+- `kenya_calendar.json`: 2026 term dates; **not used by train.py** (data is 2017-2024; per-school calendar built from the xlsx `School Calendar` sheet instead)
 
 **`train.py`** (untracked, added 2026-09-04): loads `SCH-01`/`SCH-02` xlsx,
 normalises ~14 status spellings, builds a per-school calendar,
@@ -349,7 +349,7 @@ normalises ~14 status spellings, builds a per-school calendar,
 whole, trains **RF + LogReg + rule-based**, writes `ml/models/rf_model.pkl`
 (~80 MB, gitignored) + `ml/results/evaluation_report.json`.
 - Supervised table cached to `ml/data/supervised_*.pkl`; build is **slow
-  (~19 min total)** — pure-Python feature computation. `--rebuild` forces,
+  (~19 min total)**: pure-Python feature computation. `--rebuild` forces,
   `--max-students N` for a dry run.
 - `_drop_out_of_enrolment` drops samples where `as_of` is outside a student's
   `[first record, last record] ± 14 d` (kills spurious all-absent windows).
@@ -369,28 +369,28 @@ whole, trains **RF + LogReg + rule-based**, writes `ml/models/rf_model.pkl`
 | Rule | SCH-02 holdout | .446 | .278 | .342 | .672 |
 
 **Models are weak.** LogReg beats RF on every metric (RF likely needs tuning, or
-the 7 features are near-linear + collinear — w1/w2/w3 are all attendance rates).
+the 7 features are near-linear + collinear: w1/w2/w3 are all attendance rates).
 Precision ~0.38 ≈ 2.7 false positives per true positive (`class_weight` favours
 recall). RF importance: `attendance_rate_w3` (.27) > w1 (.19) > w2 (.15).
 
-**Run tests:** `cd ml && ./venv/Scripts/python.exe -m pytest tests/ -q` — 33 pass.
+**Run tests:** `cd ml && ./venv/Scripts/python.exe -m pytest tests/ -q`: 33 pass.
 **Run training:** `cd ml && ./venv/Scripts/python.exe training/train.py`
 
 ---
 
-## 8. AWS cloud tier (`aws/`) — written, never deployed
+## 8. AWS cloud tier (`aws/`): written, never deployed
 
 Flow: PWA → Workbox queue → `POST /api/sync` (Tier 2) → SQLite `sync_queue` →
 `syncWorker` → **API Gateway → `syncHandler` Lambda → DynamoDB**.
 
-- **`syncHandler.js`** — API Gateway proxy; Ajv validate; dedupe via DynamoDB
+- **`syncHandler.js`**: API Gateway proxy; Ajv validate; dedupe via DynamoDB
   BatchGet on `eventId`; BatchWrite new records (25-chunk, UnprocessedItems
   retry); one audit BatchWrite per record.
-- **`notificationHandler.js`** — Scan `RISK_SCORES_TABLE` for `flagLevel='red'`
+- **`notificationHandler.js`**: Scan `RISK_SCORES_TABLE` for `flagLevel='red'`
   (+ `attribute_not_exists(notifiedAt)`); SMS parent via Africa's Talking; email
   teacher via SES (student name / attendance rate / risk score / top-3
   features); stamps `notifiedAt`.
-- **`lib/dynamo.js`** — **local mode** when `AWS_ACCESS_KEY_ID` unset or
+- **`lib/dynamo.js`**: **local mode** when `AWS_ACCESS_KEY_ID` unset or
   `'placeholder'` → DynamoDB Local at `DYNAMODB_ENDPOINT`; `notificationHandler`
   also dry-runs (logs) SMS/email in that mode.
 - Env: real creds not set (`AWS_ACCESS_KEY_ID=placeholder`). Go-live steps in
@@ -414,10 +414,10 @@ training first pass, Tier 1 outbound sync-drain (`syncService.js`).
 - RF hyperparameter tuning (`ForwardChainingCV` was built for this) + decision-
   threshold tuning for precision; richer features (raw counts, longer history,
   `Absence Reasons` fees-vs-illness, profile fields, term-boundary proximity).
-- **Risk engine in a client Web Worker** — will reuse `client/src/lib/attendanceSummary.js`
+- **Risk engine in a client Web Worker**: will reuse `client/src/lib/attendanceSummary.js`
   (kept React/Dexie-free for exactly this). Populates the Dexie `riskScores`
   table; Dashboard's "Absent today" list becomes risk-scored amber/red flags (US-02).
-- `ml/requirements.txt` + `ml/README.md` are empty stubs — fill them.
+- `ml/requirements.txt` + `ml/README.md` are empty stubs: fill them.
 - Local API-Gateway shim around `aws/lambda/syncHandler.js`.
 - Islamic Idd holidays missing from `kenya_calendar.json`.
 - Real Cognito user pool (Sprint 2) + real AWS deployment.
@@ -428,7 +428,7 @@ training first pass, Tier 1 outbound sync-drain (`syncService.js`).
 
 - The user provides **detailed written specs** and wants them built directly.
   When they say "what's next / next sprint", they'll paste a full spec in the
-  next message — **don't stop to ask multiple-choice scope questions.** Surface
+  next message. **Don't stop to ask multiple-choice scope questions.** Surface
   assumptions briefly in prose, then proceed with sensible defaults.
 - Platform: **Windows 11, PowerShell**. Project lives under
   `OneDrive/Desktop/SmartAttend` (hence the deliberate out-of-repo SQLite file).

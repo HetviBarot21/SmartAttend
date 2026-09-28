@@ -45,12 +45,10 @@ describe('generateSampleHistory', () => {
       expect(['present', 'absent', 'late']).toContain(row.status);
     }
 
-    // Queued for the normal outbound attendance sync, unlike seedDemoHistory's
-    // "already reconciled" demo rows - that's the whole point of this button.
+    // Unlike the demo history, these rows are queued for sync.
     const queued = await db.syncQueue.where('status').equals('pending').count();
     expect(queued).toBe(rows.length);
 
-    // Sanity check the mix isn't degenerate (some risk to show, not all-present).
     const statuses = new Set(rows.map((r) => r.status));
     expect(statuses.has('absent') || statuses.has('late')).toBe(true);
 

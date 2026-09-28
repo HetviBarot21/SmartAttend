@@ -2,8 +2,7 @@ import Dexie from 'dexie';
 
 export const db = new Dexie('SmartAttendDB');
 
-// v1 - Phase 0 baseline. Kept verbatim so devices that already opened v1
-// follow the documented upgrade path instead of silently diverging.
+// Old schema versions stay so existing devices upgrade in order.
 db.version(1).stores({
   attendanceEvents: '++id, [studentId+date], eventId, studentId, date, status, captureMethod, syncedAt, recordedBy',
   students: '++id, studentId, classGroupId, fullName, enrolledAt',
@@ -13,12 +12,7 @@ db.version(1).stores({
   auditLog: '++id, action, actorId, recordId, timestamp'
 });
 
-// v2 - Sprint 1.
-// [studentId+date] becomes UNIQUE (&) so duplicate prevention is enforced by
-// IndexedDB itself rather than by a read-then-write check that a second
-// concurrent submit could slip past. eventId is unique too: it is the
-// device-generated idempotency key the AWS sync layer deduplicates on.
-// pinCredentials/authState added for the offline PIN fallback.
+// Unique indexes let IndexedDB itself block duplicate records.
 db.version(2).stores({
   attendanceEvents: '++id, &[studentId+date], &eventId, studentId, date, status, captureMethod, syncedAt, recordedBy',
   students: '++id, &studentId, classGroupId, fullName, enrolledAt',
@@ -29,8 +23,7 @@ db.version(2).stores({
   pinCredentials: '++id, &username',
   authState: 'key'
 }).upgrade(async (tx) => {
-  // A unique index cannot be built over rows that already violate it, so
-  // collapse any v1 duplicates (keeping the earliest record) before v2 applies.
+  // Drop v1 duplicates (keeping the earliest) so the unique index can be built.
   const all = await tx.table('attendanceEvents').toArray();
   const seen = new Set();
   const doomed = [];
@@ -44,14 +37,6 @@ db.version(2).stores({
   }
 });
 
-// v3 - central admin / multi-teacher support.
-// rosterSyncQueue: roster writes (schools/classes/students/cards) waiting to
-//   reach the server's shared roster tables - the same offline-first pattern
-//   as syncQueue, but for roster rather than attendance (see
-//   services/rosterSyncService.js). No new indexes are needed on existing
-//   tables, so no .upgrade() migration is required for this bump.
-// followUps: local log of contact attempts for a flagged student, mirrored to
-//   the server via rosterSyncQueue so the admin dashboard sees the same log.
 db.version(3).stores({
   rosterSyncQueue: '++id, status, createdAt, attemptCount',
   followUps: '++id, &followUpId, studentId, createdAt',
@@ -75,7 +60,7 @@ export function todayISO(now = new Date()) {
   return new Date(now.getTime() - offset).toISOString().split('T')[0];
 }
 
-/** UUID v4. Exported for callers (e.g. seedData.js) that need a sync-schema-valid eventId. */
+/** UUID v4. */
 export function newId() {
   // crypto.randomUUID is unavailable on http:// origins in older Android WebViews.
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -89,12 +74,7 @@ export function newId() {
 }
 
 /**
- * Write one attendance record and enqueue it for sync, atomically.
- *
- * The event, its sync-queue entry and the audit row share a single Dexie
- * transaction: if the unique index rejects the event, the queue entry is
- * rolled back too, so the sync engine can never ship a record the local
- * database does not hold.
+ * Write one attendance record and queue it for sync in a single transaction.
  *
  * @throws {DuplicateAttendanceError} if this student already has a record for this date.
  */
@@ -143,15 +123,8 @@ export async function addAttendanceEvent(event) {
 }
 
 /**
- * Set a student's status for a date, creating the record if it does not exist
- * yet and updating it in place if it does.
- *
- * Attendance is a living value during the school day - a student marked absent
- * at 8am who walks in at 9am should become `late`, not stay wrong until
- * tomorrow. The record keeps its original `eventId` (the sync idempotency key -
- * its identity has not changed, only its content), gets an `updatedAt` stamp,
- * and is put back on the sync queue as `pending` so the correction propagates.
- * Every change writes an `attendance.updated` audit row with `{from, to}`.
+ * Create or update a student's record for a date. An update keeps the original
+ * eventId and puts the record back on the sync queue.
  *
  * @returns {Promise<{record: object, changed: boolean, created: boolean}>}
  * @throws {Error} on an invalid studentId / date / status
@@ -189,8 +162,6 @@ export async function setAttendance(event) {
       syncedAt: null,
     });
 
-    // Re-open the sync-queue row (or add one if a prior sync already retired it)
-    // so drainSyncQueue picks the correction up on the next pass.
     const queued = await db.syncQueue.where('eventId').equals(existing.eventId).first();
     if (queued) {
       await db.syncQueue.update(queued.id, {
@@ -219,8 +190,7 @@ export async function setAttendance(event) {
 }
 
 /**
- * Apply a set of status changes (a re-submitted roll call, some rows new, some
- * edited). Never throws for one bad row - returns per-student outcomes.
+ * Apply a set of status changes. Returns per-student outcomes instead of throwing.
  *
  * @returns {Promise<{saved: object[], created: string[], updated: string[], unchanged: string[], failed: {studentId, reason}[]}>}
  */
@@ -247,10 +217,6 @@ export async function setAttendanceBatch(events) {
   return { saved, created, updated, unchanged, failed };
 }
 
-/**
- * Write a whole roll call. Returns per-student outcomes rather than throwing,
- * so one already-recorded student cannot discard the rest of the class.
- */
 export async function addAttendanceBatch(events) {
   const saved = [];
   const duplicates = [];
@@ -272,25 +238,11 @@ export async function getStudentById(studentId) {
   return db.students.where('studentId').equals(studentId).first();
 }
 
-// --------------------------------------------------------------------------- //
-// Classes                                                                     //
-//                                                                             //
-// A device can hold several class groups (a teacher taking two streams). The  //
-// first is created in the setup wizard; more are added from the class         //
-// switcher. `schoolId` is a plain string here (the server owns the `schools`  //
-// table); the PWA does not ask the teacher about the school in v1.            //
-// --------------------------------------------------------------------------- //
+// Classes
 
 export const LOCAL_SCHOOL_ID = 'school-local-001';
 
-/**
- * Queue a roster write to reach the server's shared schools/class_groups/
- * students tables (server/src/routes/roster.js) - the offline-first
- * counterpart of `addAttendanceEvent`'s `syncQueue` row, drained by
- * `services/rosterSyncService.js` on reconnect. Call *inside* the same Dexie
- * transaction as the local write it describes (Dexie transactions are
- * ambient - no explicit tx handle needed), so the two can never diverge.
- */
+/** Queue a roster write for the server. Call inside the same transaction as the local write. */
 function queueRosterPush({ method = 'POST', path, body }) {
   return db.rosterSyncQueue.add({
     method, path, body, status: 'pending', createdAt: new Date().toISOString(), attemptCount: 0,
@@ -298,20 +250,8 @@ function queueRosterPush({ method = 'POST', path, body }) {
 }
 
 /**
- * Every class belonging to the signed-in account on this device, newest
- * first - plus the shared demo class (`demo: true`), which anyone can load to
- * explore the app. Archived classes are excluded unless asked for.
- *
- * A device can be shared by several teachers signing in and out in turn (a
- * staff room tablet, say), so classes are scoped to `ownerUsername`, not just
- * "whatever is in this device's IndexedDB" - otherwise the next person to
- * sign in would land straight in the previous teacher's roster instead of
- * setting up their own.
- *
- * Classes created before this scoping existed have no `ownerUsername`; the
- * first account to call this after upgrading claims them (rather than the
- * classes silently vanishing for everyone), and they stay that account's
- * from then on.
+ * Classes owned by this account plus the shared demo class, newest first.
+ * Classes with no owner are claimed by the first account that asks.
  *
  * @param {{includeArchived?: boolean, ownerUsername?: string}} [opts]
  */
@@ -342,7 +282,6 @@ export function classLabel(cls) {
 }
 
 /**
- * Create a class group (setup wizard / "New class").
  * @param {{grade?:string, stream?:string, academicYear?:number, name?:string, schoolId?:string,
  *           schoolName?:string, teacherName?:string, ownerUsername?:string}} input
  */
@@ -377,9 +316,7 @@ export async function createClass(input = {}) {
       action: 'class.created', actorId: null, recordId: classGroupId, timestamp: now,
       detail: JSON.stringify({ name, grade, stream }),
     });
-    // The class push needs the school row to exist first; queued in the same
-    // order, drained strictly in order, so this dependency is respected
-    // without any explicit "has the school synced yet" check.
+    // The queue drains in order, so the school is pushed before the class.
     await queueRosterPush({ path: '/api/roster/schools', body: { schoolId, name: input.schoolName || 'My School' } });
     await queueRosterPush({
       path: '/api/roster/classes',
@@ -405,8 +342,7 @@ export async function updateClass(classGroupId, patch = {}) {
   if (Object.keys(clean).length > 0) {
     await db.transaction('rw', db.classGroups, db.rosterSyncQueue, async () => {
       await db.classGroups.update(cls.id, clean);
-      // 'name' and 'active' are client-only concepts (the server's class_groups
-      // has no such columns) - only push the fields it actually stores.
+      // The server has no name or active columns for classes.
       const { grade, stream, academicYear, teacherName } = clean;
       if (grade !== undefined || stream !== undefined || academicYear !== undefined || teacherName !== undefined) {
         await queueRosterPush({ method: 'PATCH', path: `/api/roster/classes/${classGroupId}`, body: { grade, stream, academicYear, teacherName } });
@@ -446,12 +382,7 @@ export async function archiveClass(classGroupId) {
   return { archived: hasData, deleted: !hasData };
 }
 
-/**
- * The class roll, A-Z. Removed students (`active === false`) are hidden from
- * every screen by default; the roster manager passes `includeInactive` to show
- * and restore them. `active` is undefined on students seeded before this field
- * existed, so the check is `!== false`, not `=== true`.
- */
+/** The class roll, A-Z. Older rows have no `active` field, hence `!== false`. */
 export async function getStudentsByClass(classGroupId, { includeInactive = false } = {}) {
   const students = await db.students.where('classGroupId').equals(classGroupId).toArray();
   return students
@@ -459,23 +390,13 @@ export async function getStudentsByClass(classGroupId, { includeInactive = false
     .sort((a, b) => a.fullName.localeCompare(b.fullName));
 }
 
-// --------------------------------------------------------------------------- //
-// RFID cards                                                                  //
-//                                                                             //
-// The workflow is: enrol the student -> the system issues them a random card  //
-// number -> that number is printed/encoded onto a physical card they tap at   //
-// the gate. Teachers never type a card UID; they can reissue one (lost card). //
-// Format: 8 upper-case hex characters, e.g. "A1B2C3D4" - matches the UID      //
-// shape the Tier 2 RFID simulation already uses.                              //
-// --------------------------------------------------------------------------- //
+// RFID cards: 8 upper-case hex characters, e.g. "A1B2C3D4".
 
-/** Normalise an RFID card UID: trim, strip spaces, upper-case. Empty -> null. */
 export function normalizeCardUid(raw) {
   const v = String(raw ?? '').replace(/\s+/g, '').toUpperCase();
   return v || null;
 }
 
-/** The student currently holding this card UID, if any. */
 export async function getStudentByCard(cardUid) {
   const uid = normalizeCardUid(cardUid);
   if (!uid) return null;
@@ -497,11 +418,7 @@ export async function generateCardUid() {
   return uid;
 }
 
-/**
- * Enrol a student in a class. The system issues them a random RFID card number
- * straight away (pass `cardUid` only to import an existing one). The generated
- * `studentId` uses a `stu-` prefix to match the seeded IDs.
- */
+/** Enrol a student. A card number is generated unless `cardUid` is given. */
 export async function addStudent({ classGroupId, fullName, admissionNo, cardUid, guardianPhone, guardianEmail }) {
   if (!classGroupId) throw new Error('classGroupId is required');
   const name = String(fullName ?? '').trim();
@@ -549,10 +466,7 @@ export async function addStudent({ classGroupId, fullName, admissionNo, cardUid,
   return record;
 }
 
-/**
- * Issue a student a fresh random card number - use when a card is lost or
- * damaged and a replacement must be printed. Returns the new UID.
- */
+/** Issue a replacement card number for a lost or damaged card. */
 export async function issueCard(studentId) {
   const student = await db.students.where('studentId').equals(studentId).first();
   if (!student) throw new Error(`Student ${studentId} not found`);
@@ -570,10 +484,7 @@ export async function issueCard(studentId) {
   return { ...student, cardUid: uid, cardIssuedAt: now };
 }
 
-/**
- * Set or clear a student's card UID by hand (importing a pre-printed batch, or
- * clearing a card with a falsy value). Enforces one card per student device-wide.
- */
+/** Set a card UID by hand, or clear it with a falsy value. */
 export async function setStudentCard(studentId, cardUid) {
   const student = await db.students.where('studentId').equals(studentId).first();
   if (!student) throw new Error(`Student ${studentId} not found`);
@@ -593,14 +504,13 @@ export async function setStudentCard(studentId, cardUid) {
       actorId: null, recordId: studentId, timestamp: new Date().toISOString(),
       detail: JSON.stringify({ cardUid: uid }),
     });
-    // No "clear a card" endpoint server-side yet - only push a real assignment.
+    // The server has no endpoint for clearing a card.
     if (uid) await queueRosterPush({ path: `/api/roster/students/${studentId}/card`, body: { cardUid: uid } });
   });
 
   return { ...student, cardUid: uid };
 }
 
-/** Edit a student's name or admission number. */
 export async function updateStudent(studentId, patch = {}) {
   const student = await db.students.where('studentId').equals(studentId).first();
   if (!student) throw new Error(`Student ${studentId} not found`);
@@ -632,10 +542,7 @@ export async function updateStudent(studentId, patch = {}) {
 }
 
 /**
- * Remove a student from a class. A student who already has attendance history is
- * deactivated (soft delete) so the heatmap and past reports stay intact; one
- * with no records is deleted outright. Restore a soft-deleted student with
- * `updateStudent(id, { active: true })`.
+ * Soft-delete a student with attendance history, hard-delete one without.
  *
  * @returns {Promise<{removed: boolean, softDeleted: boolean}>}
  */
@@ -655,15 +562,12 @@ export async function removeStudent(studentId) {
       actorId: null, recordId: studentId, timestamp: now,
       detail: JSON.stringify({ fullName: student.fullName, historyCount }),
     });
-    // Deactivate server-side either way - harmless no-op if the row was never
-    // pushed (e.g. it was created and removed again before reconnecting).
     await queueRosterPush({ method: 'PATCH', path: `/api/roster/students/${studentId}`, body: { active: false } });
   });
 
   return { removed: true, softDeleted: soft };
 }
 
-/** Attendance rows for one class on one date. */
 export async function getAttendanceForDate(classGroupId, date = todayISO()) {
   const students = await getStudentsByClass(classGroupId);
   const ids = new Set(students.map((s) => s.studentId));
@@ -675,26 +579,17 @@ export async function getTodaysAttendance(classGroupId) {
   return getAttendanceForDate(classGroupId, todayISO());
 }
 
-/**
- * Records not yet confirmed by the server: `pending` (never sent) plus `failed`
- * (sent, will retry on backoff). Both are "awaiting sync" from the teacher's
- * point of view, so the badge counts them together.
- */
+/** Records the server has not confirmed yet (pending or failed). */
 export async function countPendingSync() {
   return db.syncQueue.where('status').anyOf('pending', 'failed').count();
 }
 
-/** Every record for one student, oldest first - used by the Sprint 4 profile view. */
 export async function getStudentHistory(studentId) {
   const rows = await db.attendanceEvents.where('studentId').equals(studentId).toArray();
   return rows.sort((a, b) => a.date.localeCompare(b.date));
 }
 
-/**
- * Every attendance record for a class since `sinceISO` (inclusive), oldest
- * first. Backs the Heatmap grid and the Alerts / Profile risk scoring, which
- * need weeks of history rather than a single day.
- */
+/** Every attendance record for a class since `sinceISO`, oldest first. */
 export async function getClassHistory(classGroupId, sinceISO) {
   const students = await getStudentsByClass(classGroupId);
   const ids = new Set(students.map((s) => s.studentId));
@@ -707,24 +602,14 @@ export async function getClassHistory(classGroupId, sinceISO) {
     .sort((a, b) => a.date.localeCompare(b.date));
 }
 
-/** Roster writes not yet confirmed by the server - mirrors countPendingSync(). */
 export async function countPendingRosterSync() {
   return db.rosterSyncQueue.where('status').anyOf('pending', 'failed').count();
 }
 
-// --------------------------------------------------------------------------- //
-// Follow-ups                                                                  //
-//                                                                             //
-// One row per time a teacher/admin reaches out about a flagged student. There //
-// is no "resolved" ticket state (see server/src/db/schema.sql's follow_ups    //
-// comment) - a fresh flag after a gap just gets a fresh row. Mirrored to the  //
-// server via rosterSyncQueue so an admin's cross-class view and the teacher's //
-// own device agree on who has been contacted.                                //
-// --------------------------------------------------------------------------- //
+// Follow-ups: one row per contact attempt about a flagged student.
 
 const FOLLOW_UP_METHODS = ['parent_call', 'sms', 'home_visit', 'meeting', 'other'];
 
-/** Log a follow-up for a flagged student. `flag` is the risk flag at the time ('amber'|'red'). */
 export async function addFollowUp({ studentId, flag, method, note, actorId }) {
   if (!studentId) throw new Error('studentId is required');
   if (!['amber', 'red'].includes(flag)) throw new Error(`flag must be amber or red (got "${flag}")`);
@@ -756,7 +641,6 @@ export async function addFollowUp({ studentId, flag, method, note, actorId }) {
   return record;
 }
 
-/** A student's follow-up log, newest first. */
 export async function getFollowUpsForStudent(studentId) {
   const rows = await db.followUps.where('studentId').equals(studentId).toArray();
   return rows.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
@@ -765,10 +649,7 @@ export async function getFollowUpsForStudent(studentId) {
 export const FOLLOW_UP_FRESH_DAYS = 14;
 
 /**
- * For a set of (typically flagged) students: when each was last followed up,
- * and which have gone `freshDays` or more without one (or never had one at
- * all). Drives the "needs follow-up" badge on Alerts cards and the follow-up
- * pill on the profile.
+ * When each student was last followed up, and which are overdue for one.
  * @returns {Promise<{lastAt: Map<string,string>, needsFollowUp: Set<string>}>}
  */
 export async function getFollowUpSummary(studentIds, freshDays = FOLLOW_UP_FRESH_DAYS) {

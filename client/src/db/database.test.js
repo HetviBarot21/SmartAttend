@@ -244,7 +244,6 @@ describe('setAttendance - editing during the day', () => {
     expect(out.unchanged).toEqual(['stu-1']);
   });
 
-  // reopening the queue relies on there being a row to reopen; drain it first
   async function drainQueue() {
     await db.syncQueue.toCollection().modify({ status: 'synced' });
     await db.attendanceEvents.toCollection().modify({ syncedAt: new Date().toISOString() });
@@ -284,7 +283,6 @@ describe('roster management', () => {
     expect(await getStudentsByClass(CLASS)).toEqual([]);
     expect((await getStudentsByClass(CLASS, { includeInactive: true })).length).toBe(1);
 
-    // restore
     await updateStudent(s.studentId, { active: true });
     expect((await getStudentsByClass(CLASS)).length).toBe(1);
   });
@@ -417,7 +415,7 @@ describe('classes', () => {
     });
 
     expect((await getClasses({ ownerUsername: 'alice' })).map((c) => c.name)).toEqual(['Legacy Class']);
-    // now claimed by alice - bob must not see it, even though it was ownerless a moment ago
+    // now owned by alice, so bob must not see it
     expect((await getClasses({ ownerUsername: 'bob' }))).toEqual([]);
   });
 

@@ -4,7 +4,6 @@ import { SyncIcon, RosterIcon, KeypadIcon, LogOutIcon } from './icons';
 
 const ROLE_LABEL = { admin: 'School admin', teacher: 'Teacher' };
 
-/** Bottom sheet from the account button: who's signed in, sync state, settings, sign out. */
 export default function AccountSheet({
   user,
   online,

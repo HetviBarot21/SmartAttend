@@ -1,17 +1,8 @@
 /**
- * Adds a couple more classes, each with a different teacher, under
- * LOCAL_SCHOOL_ID ('school-local-001' - see client/src/db/database.js).
+ * Adds demo classes with different teachers under 'school-local-001', the
+ * school an admin sees in local auth mode. Safe to re-run.
  *
- * The demo roster in db/seed.js lives under 'school-kibera-001' and is fed by
- * the RFID simulation. A real admin session in the PWA (local auth mode, no
- * Cognito pool) always reports schoolId 'school-local-001' instead - the same
- * id every teacher's device pushes its own classes under. So *this* is the
- * school an admin actually sees in the Overview tab when signed in through
- * the app, and it needs more than one class/teacher in it to be worth
- * looking at. Idempotent (safe to re-run) and additive - does not touch the
- * Kibera demo roster or anything a real device has pushed here.
- *
- * Run directly: node src/db/seedMoreClasses.js   (no npm script - one-off demo aid)
+ * Run: node src/db/seedMoreClasses.js
  */
 import { openDatabase } from './index.js';
 import { upsertSchool, upsertClassGroup, upsertStudent, recordAttendance } from './repository.js';
@@ -142,7 +133,7 @@ export function seedMoreClasses(db, today = new Date()) {
       studentsAdded += 1;
 
       const already = db.prepare('SELECT COUNT(*) AS n FROM attendance_events WHERE student_id = ?').get(s.id).n;
-      if (already > 0) continue; // idempotent - don't duplicate history on re-run
+      if (already > 0) continue;
 
       const profile = PROFILES[s.profile] ?? PROFILES.steady;
       schoolDays.forEach((date, idx) => {

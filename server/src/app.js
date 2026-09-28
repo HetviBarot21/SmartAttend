@@ -14,8 +14,6 @@ import {
 } from './db/repository.js';
 
 /**
- * Build the Express app around an open database.
- *
  * @param {object} opts
  * @param {import('better-sqlite3').Database} opts.db
  * @param {ReturnType<typeof createCardHandler>} [opts.cardHandler]
@@ -49,20 +47,14 @@ export function createApp({ db, cardHandler = createCardHandler({ db }), logger 
     res.json(getStats(db, req.query.date || todayISO()));
   });
 
-  // Inbound sync from the offline PWA. Lands records in attendance_events +
-  // sync_queue; src/workers/syncWorker.js pushes them on to AWS.
   app.use('/api/sync', createSyncRouter({ db }));
 
-  // Roster upserts pushed from the PWA (schools/classes/students/cards), and
-  // the cross-class/cross-teacher admin reporting built on top of them.
   app.use('/api/roster', createRosterRouter({ db }));
   app.use('/api/admin', createAdminRouter({ db }));
 
-  // Platform-wide school list + activate/deactivate, for the system-admin role.
   app.use('/api/system-admin', createSystemAdminRouter({ db }));
 
-  // Manually fire one scan - lets the demo show an outcome without waiting for
-  // the 5s emitter tick. Body: { "cardUid": "04A1B2C3" }
+  // Fire one scan by hand. Body: { "cardUid": "04A1B2C3" }
   app.post('/api/rfid/scan', (req, res) => {
     const { cardUid } = req.body ?? {};
     if (!cardUid) return res.status(400).json({ error: 'cardUid is required' });

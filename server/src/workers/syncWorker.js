@@ -1,31 +1,14 @@
 /**
- * Outbound sync worker (runs as a worker_threads Worker, spawned by server.js).
+ * Outbound sync worker thread, spawned by server.js.
  *
- * Every config.sync.pollIntervalMs it:
- *   1. reads sync_queue rows with status='pending' that are due
- *      (next_attempt_at IS NULL OR <= now),
- *   2. splits them into batches of config.sync.batchSize (50),
- *   3. POSTs each batch to the AWS API Gateway endpoint (config.sync.apiUrl),
- *   4. marks the rows the cloud accepted (inserted or already-present) as
- *      'synced' and stamps attendance_events.synced_at,
- *   5. on a retryable failure, schedules the row again with exponential backoff
- *      starting at backoffMinMs (60s), doubling, capped at backoffMaxMs (30 min).
- *      After maxAttempts it is parked as 'dead'. A 4xx (bad payload) is parked
- *      as 'failed' immediately.
- *
- * ---------------------------------------------------------------------------
- * No real AWS yet: point SYNC_API_GATEWAY_URL at a local shim that invokes
- * aws/lambda/syncHandler.js (e.g. `sam local start-api` or a tiny Express
- * wrapper). When real credentials arrive, set SYNC_API_GATEWAY_URL to the
- * deployed API Gateway invoke URL and SYNC_API_GATEWAY_KEY to its API key -
- * nothing else in this file changes.
- * ---------------------------------------------------------------------------
+ * Polls sync_queue for due rows, POSTs them in batches to SYNC_API_GATEWAY_URL,
+ * and marks accepted rows synced. Retryable failures back off exponentially up
+ * to maxAttempts, then the row is marked 'dead'. A 4xx marks it 'failed'.
  */
 
 import { parentPort, workerData, isMainThread } from 'node:worker_threads';
 import { fileURLToPath } from 'node:url';
 
-// A Worker inherits process.env, but server.js also forwards it explicitly.
 if (workerData && workerData.env) {
   Object.assign(process.env, workerData.env);
 }
@@ -45,8 +28,7 @@ const {
   deviceId: DEVICE_ID,
 } = config.sync;
 
-// The worker thread opens its own connection to the same file; WAL mode lets it
-// read/write alongside the HTTP server's connection.
+// Own connection to the same file; WAL mode allows it alongside the server's.
 const db = openDatabase();
 
 function log(level, message, extra) {
@@ -55,8 +37,7 @@ function log(level, message, extra) {
   else console[level === 'error' ? 'error' : 'log']('[syncWorker]', line);
 }
 
-// --- prepared statements ----------------------------------------------------
-
+// prepared statements
 const selectDue = db.prepare(`
   SELECT id, event_id, payload, attempt_count
   FROM sync_queue
@@ -98,10 +79,8 @@ const audit = db.prepare(
   `INSERT INTO audit_log (action, actor_id, record_id, detail) VALUES (?, ?, ?, ?)`
 );
 
-// --- helpers --------------------------------------------------------------
-
+// helpers
 export function backoffMs(attemptCount) {
-  // attemptCount is the number of attempts already made before this failure.
   const exp = BACKOFF_MIN_MS * 2 ** attemptCount;
   return Math.min(BACKOFF_MAX_MS, exp);
 }
@@ -112,7 +91,7 @@ export function chunk(rows, size) {
   return out;
 }
 
-/** SQLite datetime('now') -> RFC3339, so a rebuilt payload passes the schema. */
+/** SQLite datetime -> RFC3339, as the sync schema requires. */
 function toIso(sqliteTs) {
   if (!sqliteTs) return new Date().toISOString();
   if (sqliteTs.includes('T')) return sqliteTs;
@@ -154,7 +133,6 @@ async function postBatch(records) {
   }
 }
 
-/** event_ids the cloud has confirmed are stored (freshly inserted or already there). */
 export function acceptedEventIds(batchRecords, body) {
   const ids = new Set();
   for (const key of ['inserted', 'skipped']) {
@@ -162,7 +140,7 @@ export function acceptedEventIds(batchRecords, body) {
       ids.add(typeof entry === 'string' ? entry : entry.eventId);
     }
   }
-  // A bare 2xx with no per-record detail means "the whole batch landed".
+  // A 2xx with no per-record detail means the whole batch landed.
   if (ids.size === 0) for (const r of batchRecords) ids.add(r.eventId);
   return ids;
 }
@@ -211,8 +189,7 @@ const failBatch = db.transaction((rows, { retryable, error }) => {
   return { retried, parked };
 });
 
-// --- main loop -----------------------------------------------------------
-
+// main loop
 let ticking = false;
 
 export async function tick() {
@@ -243,7 +220,6 @@ export async function tick() {
       try {
         response = await postBatch(records);
       } catch (err) {
-        // network error / timeout / DNS - always retryable
         const { retried, parked } = failBatch(batchRows, {
           retryable: true,
           error: `network: ${err.name || 'Error'}: ${err.message}`,
@@ -265,7 +241,6 @@ export async function tick() {
         });
         log('warn', `batch server error ${response.status}`, { retried, parked });
       } else {
-        // 4xx other than 429: the payload will not become valid on retry.
         const { parked } = failBatch(batchRows, {
           retryable: false,
           error: `http ${response.status}: ${JSON.stringify(response.body).slice(0, 300)}`,
@@ -289,8 +264,7 @@ export function start() {
   handle.unref?.();
 }
 
-// Start when running as the spawned Worker, or when invoked directly for a
-// one-off manual run. Stay quiet when imported as a module (e.g. from tests).
+// Run as a Worker or directly, but not when imported by tests.
 const invokedDirectly =
   process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
 if (!isMainThread || invokedDirectly) {

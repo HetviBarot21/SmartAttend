@@ -6,12 +6,8 @@ import {
 } from './icons';
 
 /**
- * Landing screen for a device with no session. Three views:
- *   signin  - email + password (or the offline-PIN hint)
- *   signup  - name + email + password; the only place a new teacher is created
- *   confirm - Cognito only: the email verification code after a sign-up
- * In local-auth mode (no Cognito pool) sign-up skips straight to a signed-in
- * session, so the confirm view is never shown.
+ * Views: signin, signup, and confirm (the Cognito email code, never shown in
+ * local mode).
  */
 export default function LoginScreen() {
   const { signIn, signUp, confirmSignUp, resendConfirmationCode, cognitoConfigured } = useAuth();
@@ -31,8 +27,6 @@ export default function LoginScreen() {
   const [busy, setBusy] = useState(false);
   const [pinHint, setPinHint] = useState(false);
 
-  // Real Cognito needs the network for sign-in and sign-up. The local fallback
-  // does not for sign-in, so only first-time sign-in is blocked once a pool exists.
   const blocked = cognitoConfigured && !online && view !== 'confirm';
 
   function switchView(next) {
@@ -68,7 +62,6 @@ export default function LoginScreen() {
         switchView('confirm');
         setNotice(`We emailed a verification code to ${email.trim()}.`);
       }
-      // Local mode: signUp already applied a session; nothing more to do.
     } catch (err) {
       setError(err.message ?? 'Could not create the account');
       setBusy(false);

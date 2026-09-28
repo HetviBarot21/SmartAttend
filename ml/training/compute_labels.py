@@ -1,17 +1,10 @@
 """Label computation for the SmartAttend AI persistent-absenteeism model.
 
-The supervised target: for a student and a reference date ``as_of``, the label
-is ``1`` if the student is projected to miss **>= 30% of scheduled school days
-in the next four-week window** ``[as_of, as_of + 28d)``, and ``0`` otherwise.
-This is the *outcome* the Random Forest is trained to predict from the
-seven features in :mod:`feature_engineering`.
+The label is ``1`` if the student misses >= 30% of scheduled school days in
+``[as_of, as_of + 28d)``, else ``0``. Labels look forward and features look
+backward, so they never overlap.
 
-Labels look strictly forward; features (computed elsewhere) look strictly
-backward. The two windows meet at ``as_of`` and never overlap, so there is no
-leakage between X and y for a given sample.
-
-A label is ``nan`` when the forward window contains no scheduled school days
-(nothing to measure) - those samples must be dropped before training.
+A label is ``nan`` when the forward window has no school days; drop those rows.
 """
 
 from __future__ import annotations
@@ -75,9 +68,7 @@ def compute_label(
     return 1.0 if rate >= threshold else 0.0
 
 
-# --------------------------------------------------------------------------- #
-# Dataset assembly                                                            #
-# --------------------------------------------------------------------------- #
+# Dataset assembly
 
 
 def generate_reference_dates(
@@ -117,10 +108,7 @@ def build_training_table(
     Columns: ``student_id``, ``as_of``, the eleven :data:`FEATURE_NAMES`, and
     :data:`LABEL_NAME`. Rows whose forward window has no school days are dropped
     when ``drop_unlabelled`` is true. ``reasons_by_student`` and ``term_bounds``
-    are optional and passed straight through to
-    :func:`feature_engineering.compute_features` per student - omit both to get
-    exactly the original seven-feature behaviour (the new four columns come
-    back ``nan``, same as any other reference this pipeline had no data for).
+    are passed to :func:`feature_engineering.compute_features`.
     """
     from feature_engineering import FEATURE_NAMES, _columns
 

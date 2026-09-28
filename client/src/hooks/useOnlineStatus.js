@@ -1,13 +1,6 @@
 import { useEffect, useState } from 'react';
 
-/**
- * Tracks navigator.onLine.
- *
- * This reports whether the device has a network interface, not whether AWS is
- * reachable - a school on a captive-portal hotspot reads as online while every
- * sync fails. Sprint 2's sync engine treats it as a hint and still relies on
- * request failure to decide when to back off.
- */
+/** Tracks navigator.onLine. This is only a hint; the server may still be unreachable. */
 export function useOnlineStatus() {
   const [online, setOnline] = useState(() =>
     typeof navigator === 'undefined' ? true : navigator.onLine

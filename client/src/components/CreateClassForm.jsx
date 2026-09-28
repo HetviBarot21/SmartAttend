@@ -2,11 +2,7 @@ import { useMemo, useState } from 'react';
 import { createClass } from '../db/database';
 import { useAuth } from '../auth/AuthContext';
 
-/**
- * Reusable "create a class" form - used by the first-run SetupWizard and by
- * "New class" in the class switcher. The class name defaults to
- * "<grade> <stream>" but can be overridden.
- */
+/** Create-class form. The name defaults to "<grade> <stream>". */
 export default function CreateClassForm({ onCreated, onCancel, submitLabel = 'Create class' }) {
   const { user } = useAuth();
   const [grade, setGrade] = useState('');

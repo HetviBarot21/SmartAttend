@@ -1,10 +1,4 @@
-/**
- * GET/POST /api/system-admin/* - platform-wide view across every school, for
- * the system-admin role (above school admin - see AdminOverview.jsx for the
- * per-school view). Currently just school listing + activate/deactivate; no
- * identity system enforces who can call this yet (same trust level as the
- * rest of this sprint-stage backend - see admin.js).
- */
+/** /api/system-admin/*: list schools and activate or deactivate them. No auth check yet. */
 
 import { Router } from 'express';
 import { getAllSchools, setSchoolStatus } from '../db/repository.js';

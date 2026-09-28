@@ -18,8 +18,7 @@ export default function PinUnlock() {
   const lockedUntil = pinState.lockedUntil ?? null;
   const locked = lockedUntil != null && lockedUntil > now;
 
-  // Tick only while a lockout is counting down, so the input re-enables on its
-  // own instead of stranding the teacher on a stale "try again in 1 minute".
+  // Tick during a lockout so the input re-enables by itself.
   useEffect(() => {
     if (!locked) return undefined;
     const id = setInterval(() => setNow(Date.now()), 1000);

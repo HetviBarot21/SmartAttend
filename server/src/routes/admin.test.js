@@ -35,7 +35,7 @@ afterEach(async () => {
   db.close();
 });
 
-/** Back-fill the last 28 school days: 'steady' student mostly present, 'chronic' mostly absent recently. */
+/** Back-fill 28 school days: 'steady' mostly present, 'chronic' mostly absent. */
 function seedTwoMonthsHistory() {
   const today = new Date();
   for (let n = 40; n >= 1; n -= 1) {
@@ -84,11 +84,7 @@ describe('GET /api/admin/schools/:id/flagged', () => {
     assert.ok(chronic, 'chronic absentee should be flagged');
     assert.equal(chronic.flag, 'red');
     assert.equal(chronic.needsFollowUp, true);
-    // The trained model's probabilities float in a narrow band for anything
-    // short of a real absence pattern (see server/src/lib/riskModel.test.js),
-    // so "steady" may still show up amber here rather than being excluded
-    // outright - what actually matters is the chronic case scoring clearly
-    // worse, not a binary in/out of this list.
+    // "steady" can still be amber (see riskModel.test.js), so only compare scores.
     if (steady) assert.ok(chronic.dropoutProbability > steady.dropoutProbability);
   });
 });

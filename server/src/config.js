@@ -1,5 +1,4 @@
-// Central config. Everything is overridable by an environment variable so the
-// same code runs in the Friday demo, in tests, and later in a container.
+// Every setting can be overridden by an environment variable.
 import { resolve, join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
 
@@ -8,10 +7,8 @@ const num = (value, fallback) => {
   return Number.isFinite(n) ? n : fallback;
 };
 
-// This repo commonly lives under "OneDrive/..." on Windows. OneDrive keeps file
-// handles open to sync changes, which deadlocks SQLite's WAL files after the
-// first write. So the database lives OUTSIDE the project by default. Override
-// with DB_PATH if your checkout is not under a syncing folder.
+// OneDrive locks SQLite's WAL files, so the database lives outside the project
+// by default. Override with DB_PATH.
 const defaultDbDir =
   process.env.LOCALAPPDATA ||
   (process.platform === 'win32' ? join(homedir(), 'AppData', 'Local') : tmpdir());
@@ -19,7 +16,6 @@ const defaultDbDir =
 export const config = {
   port: num(process.env.PORT, 3000),
 
-  // Absolute path to the SQLite file, or ':memory:' for an ephemeral DB.
   dbPath:
     process.env.DB_PATH === ':memory:'
       ? ':memory:'
@@ -39,9 +35,7 @@ export const config = {
   // Start the RFID simulation loop when the server boots.
   simulationEnabled: process.env.SIMULATION_ENABLED !== 'false',
 
-  // Outbound cloud sync (src/workers/syncWorker.js). The worker drains
-  // sync_queue and POSTs batches to the AWS sync Lambda via API Gateway. With
-  // no real AWS yet, point apiUrl at a local shim around aws/lambda/syncHandler.js.
+  // Outbound cloud sync (src/workers/syncWorker.js).
   sync: {
     workerDisabled: process.env.SYNC_WORKER_DISABLED === 'true',
     apiUrl: process.env.SYNC_API_GATEWAY_URL || '',

@@ -1,1 +1,1 @@
-"""SmartAttend AI - ML training package (Sprint 2+)."""
+"""SmartAttend AI ML training package."""

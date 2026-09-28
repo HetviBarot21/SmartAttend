@@ -1,30 +1,18 @@
 #!/usr/bin/env python
-"""Hyperparameter tuning + a stronger model + threshold tuning, on top of train.py.
+"""Hyperparameter and decision-threshold tuning on top of train.py.
 
-train.py's baseline (evaluation_report.json, 2026-09-04) used fixed,
-untuned RandomForest params and the sklearn-default 0.5 decision threshold.
-Logistic Regression beat it on every metric - a sign the RF was never given a
-real chance. This script:
+  1. Tunes RandomForest and HistGradientBoosting with RandomizedSearchCV on
+     out-of-time folds (ForwardChainingCV).
+  2. Picks the F1-maximising threshold from out-of-fold predictions on the
+     SCH-01 training period only.
+  3. Compares the tuned models with the baselines on SCH-01 test and SCH-02.
 
-  1. Tunes RandomForest via RandomizedSearchCV, scored on out-of-time folds
-     (ForwardChainingCV) so no future data ever informs a training fold.
-  2. Tries HistGradientBoostingClassifier the same way - native NaN handling,
-     usually stronger than a plain RF on tabular data this size.
-  3. Picks a decision threshold from out-of-fold predictions on the SCH-01
-     training period ONLY (never touches SCH-01 test or SCH-02), maximising
-     F1, then applies that one fixed threshold everywhere.
-  4. Evaluates the tuned RF, tuned HGB, and the original fixed-threshold
-     baselines side by side on SCH-01 test and the SCH-02 holdout school.
-
-Reuses train.py's cached supervised tables (ml/data/supervised_*.pkl) - no
-data changes, so results are directly comparable to evaluation_report.json.
-The 7 features and the label definition are untouched; nothing in the app
-(client or server risk model, rule-based scorer) is affected by this script.
+Reuses train.py's cached tables in ml/data/supervised_*.pkl.
 
 Usage
 -----
     cd ml && ./venv/Scripts/python.exe training/tune.py
-    ./venv/Scripts/python.exe training/tune.py --n-iter 8 --n-jobs 2   # lighter run
+    ./venv/Scripts/python.exe training/tune.py --n-iter 8 --n-jobs 2
 """
 
 from __future__ import annotations
@@ -70,9 +58,7 @@ from train import (  # noqa: E402
 REPO_ROOT = _HERE.parent.parent
 
 
-# --------------------------------------------------------------------------- #
-# Search spaces                                                               #
-# --------------------------------------------------------------------------- #
+# Search spaces
 
 
 def rf_search_space() -> dict:
@@ -107,17 +93,14 @@ def make_rf_pipeline() -> Pipeline:
 
 
 def make_hgb() -> HistGradientBoostingClassifier:
-    # HGB handles NaN splits natively - no imputer needed.
     return HistGradientBoostingClassifier(random_state=SEED, class_weight="balanced")
 
 
-# --------------------------------------------------------------------------- #
-# Threshold selection - out-of-fold on the training period only               #
-# --------------------------------------------------------------------------- #
+# Threshold selection
 
 
 def best_threshold_from_oof(y_true: np.ndarray, proba: np.ndarray) -> tuple[float, float]:
-    """Threshold in (0, 1) maximising F1, scanned at 0.01 resolution."""
+    """Threshold in (0, 1) maximising F1, in steps of 0.01."""
     best_t, best_f1 = 0.5, -1.0
     for t in np.arange(0.05, 0.96, 0.01):
         pred = (proba >= t).astype(int)
@@ -142,12 +125,8 @@ def evaluate_at_threshold(y_true, proba, threshold: float) -> dict:
 def oof_predict_proba(estimator, X: pd.DataFrame, y: pd.Series, cv, groups) -> tuple[np.ndarray, np.ndarray]:
     """Out-of-fold predict_proba[:, 1] via ForwardChainingCV's own folds.
 
-    Not sklearn's cross_val_predict - ForwardChainingCV's first block is
-    train-only (never a test fold), so the folds are not a full partition of
-    X and cross_val_predict refuses that outright. This hand-rolled version
-    just leaves samples in that first block uncovered; the caller filters to
-    `covered` before scoring, so the threshold is still chosen purely from
-    out-of-fold predictions, never from data a fold was trained on.
+    cross_val_predict cannot be used because the first block is never a test
+    fold. Those samples are left out of `covered`.
     """
     proba = np.full(len(X), np.nan)
     covered = np.zeros(len(X), dtype=bool)
@@ -159,9 +138,7 @@ def oof_predict_proba(estimator, X: pd.DataFrame, y: pd.Series, cv, groups) -> t
     return proba, covered
 
 
-# --------------------------------------------------------------------------- #
-# Orchestration                                                               #
-# --------------------------------------------------------------------------- #
+# Orchestration
 
 
 def main(argv=None) -> int:
@@ -209,7 +186,7 @@ def main(argv=None) -> int:
         "models": {},
     }
 
-    # ---- Random Forest, tuned ------------------------------------------- #
+    # Random Forest
     print(f"\n[1/2] RandomizedSearchCV: RandomForest, {args.n_iter} iters x {args.cv_splits} folds")
     t0 = time.time()
     rf_search = RandomizedSearchCV(
@@ -249,7 +226,7 @@ def main(argv=None) -> int:
         "sch02_holdout_tuned_threshold": evaluate_at_threshold(y_holdout, rf_proba_holdout, rf_threshold),
     }
 
-    # ---- HistGradientBoosting, tuned -------------------------------------- #
+    # HistGradientBoosting
     print(f"\n[2/2] RandomizedSearchCV: HistGradientBoosting, {args.n_iter} iters x {args.cv_splits} folds")
     t0 = time.time()
     hgb_search = RandomizedSearchCV(
@@ -303,7 +280,7 @@ def main(argv=None) -> int:
         MODELS_DIR / "best_model.pkl",
     )
 
-    # ---- comparison table -------------------------------------------------- #
+    # Comparison table
     header = f"{'Model':<32} {'Eval set':<18} {'Prec':>6} {'Recall':>7} {'F1':>6} {'AUC':>6}"
     print("\n" + "=" * len(header))
     print("TUNED MODEL COMPARISON (tuned decision threshold, chosen out-of-fold)")

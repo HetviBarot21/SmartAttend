@@ -34,7 +34,6 @@ describe('drainSyncQueue', () => {
     const fetchImpl = fetchReturning({ inserted: [record.eventId], skipped: [] });
     const summary = await drainSyncQueue({ deviceId: 'device-1', fetchImpl });
 
-    // Posted the queued record to the sync endpoint, once.
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     const [url, init] = fetchImpl.mock.calls[0];
     expect(url).toBe('/api/sync');
@@ -53,12 +52,10 @@ describe('drainSyncQueue', () => {
       },
     ]);
 
-    // Queue row flipped to synced...
     const queued = await db.syncQueue.where('eventId').equals(record.eventId).first();
     expect(queued.status).toBe('synced');
     expect(queued.syncedAt).toEqual(expect.any(String));
 
-    // ...and the attendance record is stamped too.
     const stored = await db.attendanceEvents.where('eventId').equals(record.eventId).first();
     expect(stored.syncedAt).toEqual(expect.any(String));
 

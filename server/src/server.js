@@ -7,7 +7,7 @@ import { createCardHandler } from './attendance/handler.js';
 import { RfidEmitter } from './simulation/rfidEmitter.js';
 
 const db = getDb();
-seed(db); // idempotent - roster is present on every boot
+seed(db);
 
 const cardHandler = createCardHandler({ db });
 const app = createApp({ db, cardHandler });
@@ -17,9 +17,7 @@ const server = app.listen(config.port, () => {
   console.log(`  DB: ${config.dbPath}`);
 });
 
-// --- outbound sync worker -------------------------------------------------
-// Drains sync_queue and POSTs batches to AWS. Runs in its own thread so a slow
-// or hanging cloud request never blocks the HTTP server or the simulation.
+// The sync worker runs in its own thread so a slow AWS call cannot block the server.
 let syncWorker = null;
 if (!config.sync.workerDisabled) {
   syncWorker = new Worker(new URL('./workers/syncWorker.js', import.meta.url), {

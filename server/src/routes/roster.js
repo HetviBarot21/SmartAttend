@@ -1,16 +1,4 @@
-/**
- * POST/PATCH /api/roster/* - roster upserts pushed from the PWA.
- *
- * Mirrors routes/sync.js's role for attendance: the durable landing point for
- * roster writes a teacher makes offline-first on their device
- * (client/src/services/rosterSyncService.js drains client/src/db/database.js's
- * `rosterSyncQueue` here on reconnect). Idempotent upserts, so a retried push
- * after a dropped connection repairs rather than errors.
- *
- * Validation here is intentionally light (presence checks), matching the
- * existing style of the simpler endpoints in app.js (e.g. POST /api/rfid/scan)
- * rather than the full Ajv schema sync.js uses for its batch payload.
- */
+/** POST/PATCH /api/roster/*: idempotent roster upserts pushed from the PWA. */
 
 import { Router } from 'express';
 import {

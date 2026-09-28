@@ -1,24 +1,12 @@
 /**
- * POST /api/sync - inbound attendance sync from the offline PWA.
+ * POST /api/sync: attendance batches from the PWA.
  *
- * Pipeline position: PWA (IndexedDB queue) -> **here** -> sync_queue table ->
- * syncWorker.js -> AWS. This handler is the durable landing point: once it
- * answers 200 the record is safe on the server's disk and the PWA can drop it
- * from its local queue.
- *
- * Behaviour:
- *   1. Validate the whole batch against attendanceSync.schema.js. A malformed
- *      batch is rejected 400 and nothing is written.
- *   2. For each record, look it up by eventId (the device idempotency key).
- *        - not seen before, and (studentId, date) is free  -> insert
- *        - seen before, same status                        -> skip (duplicate)
- *        - seen before, status changed                     -> update in place
- *          (a teacher corrected a mark during the day) and re-queue for AWS
- *        - a *different* eventId already covers (studentId, date) -> skip
- *   3. Insert / update survivors and (re-)enqueue them in sync_queue, one
- *      transaction per record.
- *   4. Respond 200 with a per-record summary. Updated records are reported in
- *      `inserted` so the PWA settles them the same way.
+ * A malformed batch is rejected with 400. Each record is then matched by eventId:
+ *   - new, and (studentId, date) is free   -> insert
+ *   - known, same status                   -> skip
+ *   - known, status changed                -> update and re-queue
+ *   - another eventId has (studentId, date) -> skip
+ * Updated records are reported in `inserted`.
  */
 
 import { Router } from 'express';
@@ -75,7 +63,6 @@ export function createSyncRouter({ db }) {
     createdAt: record.createdAt,
   });
 
-  /** Insert one record + enqueue it + audit it, atomically. */
   const acceptRecord = db.transaction((record, deviceId) => {
     const normalized = normalize(record);
     insertEvent.run(normalized);
@@ -88,7 +75,6 @@ export function createSyncRouter({ db }) {
     );
   });
 
-  /** Apply a corrected status to a record already on the server, and re-queue it. */
   const acceptUpdate = db.transaction((record, deviceId, fromStatus) => {
     const normalized = normalize(record);
     updateEvent.run(normalized);
@@ -114,8 +100,6 @@ export function createSyncRouter({ db }) {
     const updated = [];
 
     for (const record of records) {
-      // Seen this exact record before? Either nothing changed (skip) or the
-      // teacher corrected the mark (update in place + re-queue).
       const existing = findEvent.get(record.eventId);
       if (existing) {
         if (existing.status === record.status) {
@@ -132,7 +116,6 @@ export function createSyncRouter({ db }) {
         }
         continue;
       }
-      // A different event already covers this student/day.
       const clash = findByStudentDate.get(record.studentId, record.date);
       if (clash) {
         skipped.push({
@@ -149,12 +132,9 @@ export function createSyncRouter({ db }) {
       } catch (err) {
         const code = err && err.code;
         if (code === 'SQLITE_CONSTRAINT_FOREIGNKEY') {
-          // The PWA sent a student this server's roster does not know. The demo
-          // rosters are seeded identically, so this is a data issue, not a retry.
           skipped.push({ eventId: record.eventId, reason: 'unknown_student' });
         } else if (/UNIQUE constraint failed/.test(err?.message || '')) {
-          // A concurrent request won the race; treat as a skip so the PWA batch
-          // still settles cleanly.
+          // A concurrent request inserted it first.
           skipped.push({ eventId: record.eventId, reason: 'duplicate_race' });
         } else {
           console.error('[sync] insert failed', err);

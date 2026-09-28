@@ -1,8 +1,5 @@
-/* SmartAttend AI — Tier 1 PWA
-   Mobile-first. Target device: a mid-range Android phone held one-handed by a
-   teacher standing in front of a class. Tap targets stay >=44px, primary
-   actions sit at the bottom within thumb reach, and the whole app is a single
-   centred column that never scrolls sideways. */
+/* SmartAttend AI, Tier 1 PWA. Mobile-first: tap targets >= 44px, primary
+   actions at the bottom. */
 
 :root {
   /* neutrals */
@@ -15,7 +12,7 @@
   --canvas:     #f6f7fb;
   --canvas-in:  #f1f2f8;
 
-  /* brand — slate/indigo */
+  /* brand: slate/indigo */
   --slate-900:  #2b3040;
   --slate-800:  #363c4c;
   --slate-700:  #3f4552;
@@ -68,13 +65,7 @@ input  { font-family: inherit; }
 
 /* ============================================================= app shell === */
 
-/*
- * .shell is the outer row: SideNav (desktop only, see the >=768px block near
- * the bottom of this file) + .app. At phone width SideNav is display:none, so
- * .app's own `margin: 0 auto` centers it in .shell exactly as it did before
- * .shell existed. At desktop, flexbox auto-margins center .app in whatever
- * width is left after SideNav's fixed width - no extra centering math needed.
- */
+/* .shell holds SideNav (desktop only) and .app. */
 .shell {
   display: flex;
   min-height: 100%;
@@ -732,14 +723,7 @@ input  { font-family: inherit; }
 
 /* ============================================================== profile === */
 
-/*
- * The hero is a solid colour block, not another white card - the point of
- * this screen is "how worried should I be," so severity should read at a
- * glance from colour alone, before anyone reads a number. Green/new students
- * get the calm, default surface treatment; amber/red get a tinted card. Real
- * facts (percentages, day counts, a trend word) replace the model's internal
- * 0-1 component scores - nobody outside the codebase needs those.
- */
+/* Amber and red students get a tinted hero card so severity shows at a glance. */
 .profile-hero-card {
   border-radius: var(--radius);
   padding: 18px;
@@ -806,7 +790,6 @@ input  { font-family: inherit; }
 .trend-chart { width: 100%; height: 140px; display: block; }
 .trend-axis { font-size: 10px; fill: var(--ink-muted); }
 
-/* Plain-language reasons, a colour-coded rule instead of a repeated icon per line. */
 .reason-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 11px; }
 .reason-list__item {
   font-size: 13px;
@@ -895,8 +878,6 @@ input  { font-family: inherit; }
 .sheet__grip { width: 40px; height: 4px; border-radius: 999px; background: var(--line); margin: 4px auto 14px; }
 .sheet__name { font-size: 16px; font-weight: 800; }
 .sheet__sub { font-size: 12.5px; color: var(--ink-muted); margin: 2px 0 14px; }
-/* account sheet specifics - a richer header + icon rows, distinct from the
-   plain label/value .sheet__row pattern ClassSwitcher still uses */
 .account-head { display: flex; align-items: center; gap: 12px; margin-bottom: 16px; }
 .account-head__id { flex: 1; min-width: 0; }
 .account-head__name { font-size: 16px; font-weight: 800; }
@@ -1141,9 +1122,7 @@ div.followup-badge {
   .app { max-width: 880px; }
   .app__scroll { padding: 20px 36px 40px; }
 
-  /* The mobile roll-call submit bar docks above the bottom nav; at desktop
-     there is no bottom nav to dock above, so it sits in the normal flow
-     instead of trying to stay viewport-centered next to a sidebar. */
+  /* No bottom nav on desktop, so the submit bar sits in normal flow. */
   .rollbar {
     position: static;
     left: auto;

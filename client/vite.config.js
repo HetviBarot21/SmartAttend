@@ -3,14 +3,11 @@ import react from '@vitejs/plugin-react'
 import { VitePWA } from 'vite-plugin-pwa'
 
 export default defineConfig({
-  // amazon-cognito-identity-js references the Node `global` object, which does
-  // not exist in the browser and throws "global is not defined" on load.
+  // amazon-cognito-identity-js expects Node's `global`.
   define: {
     global: 'globalThis',
   },
-  // Dev-only: forward every /api request to the Tier 2 Express server so the
-  // PWA's sync/data calls (e.g. syncService.js -> POST /api/sync) reach it
-  // instead of 404ing against the Vite dev server.
+  // Dev only: forward /api to the Tier 2 server.
   server: {
     proxy: {
       '/api': {
@@ -22,8 +19,7 @@ export default defineConfig({
   plugins: [
     react(),
     VitePWA({
-      // Custom service worker (src/sw/sw.js) so the outbound Background Sync
-      // queue in src/workers/syncQueue.js can live inside the worker.
+      // Custom service worker, see src/sw/sw.js.
       strategies: 'injectManifest',
       srcDir: 'src/sw',
       filename: 'sw.js',
