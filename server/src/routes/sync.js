@@ -11,9 +11,10 @@
  *      batch is rejected 400 and nothing is written.
  *   2. For each record, look it up by eventId (the device idempotency key).
  *        - not seen before, and (studentId, date) is free  -> insert
- *        - seen before, same status                        -> skip (duplicate)
- *        - seen before, status changed                     -> update in place
- *          (a teacher corrected a mark during the day) and re-queue for AWS
+ *        - seen before, same status and reason             -> skip (duplicate)
+ *        - seen before, status or reason changed           -> update in place
+ *          (a teacher corrected a mark, or added an absence reason later)
+ *          and re-queue for AWS
  *        - a *different* eventId already covers (studentId, date) -> skip
  *   3. Insert / update survivors and (re-)enqueue them in sync_queue, one
  *      transaction per record.
@@ -33,20 +34,20 @@ export function createSyncRouter({ db }) {
   if (!db) throw new Error('createSyncRouter needs a db');
   const router = Router();
 
-  const findEvent = db.prepare('SELECT status FROM attendance_events WHERE event_id = ?');
+  const findEvent = db.prepare('SELECT status, reason FROM attendance_events WHERE event_id = ?');
   const findByStudentDate = db.prepare(
     'SELECT event_id FROM attendance_events WHERE student_id = ? AND date = ?'
   );
   const insertEvent = db.prepare(`
     INSERT INTO attendance_events
-      (event_id, student_id, date, status, capture_method, recorded_by, source, created_at)
+      (event_id, student_id, date, status, capture_method, recorded_by, reason, source, created_at)
     VALUES
-      (@eventId, @studentId, @date, @status, @captureMethod, @recordedBy, 'client', @createdAt)
+      (@eventId, @studentId, @date, @status, @captureMethod, @recordedBy, @reason, 'client', @createdAt)
   `);
   const updateEvent = db.prepare(`
     UPDATE attendance_events
        SET status = @status, capture_method = @captureMethod,
-           recorded_by = @recordedBy, synced_at = NULL
+           recorded_by = @recordedBy, reason = @reason, synced_at = NULL
      WHERE event_id = @eventId
   `);
   const enqueue = db.prepare(`
@@ -72,6 +73,9 @@ export function createSyncRouter({ db }) {
     status: record.status,
     captureMethod: record.captureMethod || 'manual',
     recordedBy: record.recordedBy ?? null,
+    // A reason only means something on an absence - drop it otherwise, so a
+    // mark corrected from absent to present doesn't keep a stale reason.
+    reason: record.status === 'absent' ? record.reason ?? null : null,
     createdAt: record.createdAt,
   });
 
@@ -89,7 +93,7 @@ export function createSyncRouter({ db }) {
   });
 
   /** Apply a corrected status to a record already on the server, and re-queue it. */
-  const acceptUpdate = db.transaction((record, deviceId, fromStatus) => {
+  const acceptUpdate = db.transaction((record, deviceId, existing) => {
     const normalized = normalize(record);
     updateEvent.run(normalized);
     enqueue.run({ eventId: normalized.eventId, payload: JSON.stringify(normalized) });
@@ -97,7 +101,13 @@ export function createSyncRouter({ db }) {
       'sync.updated',
       normalized.recordedBy ?? deviceId ?? null,
       normalized.eventId,
-      JSON.stringify({ deviceId, from: fromStatus, to: normalized.status })
+      JSON.stringify({
+        deviceId,
+        from: existing.status,
+        to: normalized.status,
+        fromReason: existing.reason,
+        toReason: normalized.reason,
+      })
     );
   });
 
@@ -115,14 +125,16 @@ export function createSyncRouter({ db }) {
 
     for (const record of records) {
       // Seen this exact record before? Either nothing changed (skip) or the
-      // teacher corrected the mark (update in place + re-queue).
+      // teacher corrected the mark or added a reason later (update in place +
+      // re-queue).
       const existing = findEvent.get(record.eventId);
       if (existing) {
-        if (existing.status === record.status) {
+        const { status, reason } = normalize(record);
+        if (existing.status === status && existing.reason === reason) {
           skipped.push({ eventId: record.eventId, reason: 'duplicate_event_id' });
         } else {
           try {
-            acceptUpdate(record, deviceId, existing.status);
+            acceptUpdate(record, deviceId, existing);
             inserted.push(record.eventId);
             updated.push(record.eventId);
           } catch (err) {

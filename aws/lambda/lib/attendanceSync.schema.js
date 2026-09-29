@@ -17,6 +17,7 @@ const attendanceRecordSchema = {
     status: { type: 'string', enum: ['present', 'absent', 'late'] },
     captureMethod: { type: 'string', enum: ['manual', 'rfid', 'fingerprint', 'import'], default: 'manual' },
     recordedBy: { type: ['string', 'null'], maxLength: 128 },
+    reason: { enum: ['fee', 'health', 'other', 'unknown', null] },
     createdAt: { type: 'string', format: 'date-time' }
   }
 };

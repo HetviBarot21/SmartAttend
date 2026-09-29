@@ -20,6 +20,10 @@ export const attendanceRecordSchema = {
       default: 'manual',
     },
     recordedBy: { type: ['string', 'null'], maxLength: 128 },
+    // Why the student was absent, if the teacher said. Optional so older PWA
+    // builds (which never send it) keep syncing. Only 'fee' and 'health' feed
+    // the risk model; 'other' / 'unknown' let a teacher record something anyway.
+    reason: { enum: ['fee', 'health', 'other', 'unknown', null] },
     createdAt: { type: 'string', format: 'date-time' },
   },
 };

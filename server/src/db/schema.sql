@@ -74,6 +74,9 @@ CREATE TABLE IF NOT EXISTS attendance_events (
   verified       INTEGER NOT NULL DEFAULT 0 CHECK (verified IN (0, 1)),
   recorded_by    TEXT,                                -- teacher username, or NULL for hardware
   source         TEXT NOT NULL DEFAULT 'simulation' CHECK (source IN ('simulation', 'client', 'manual')),
+  -- absence reason from the teacher; NULL = not given / not absent. 'fee' and
+  -- 'health' feed the risk model's fee_absence_rate / health_absence_rate.
+  reason         TEXT CHECK (reason IN ('fee', 'health', 'other', 'unknown')),
   created_at     TEXT NOT NULL DEFAULT (datetime('now')),
   synced_at      TEXT,                                -- set by syncWorker once AWS confirms the row
   UNIQUE (student_id, date)

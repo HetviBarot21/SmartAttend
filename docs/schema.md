@@ -49,6 +49,7 @@ The append-only attendance log.
 | `verified` | 0/1 — 1 when a fingerprint challenge passed |
 | `recorded_by` | teacher username, or `NULL` for hardware |
 | `source` | `simulation` \| `client` \| `manual` |
+| `reason` | absence reason: `fee` \| `health` \| `other` \| `unknown`, or `NULL` (not given / not absent). `fee` + `health` feed the risk model |
 | `created_at` | timestamp |
 | `synced_at` | timestamp, set by `syncWorker.js` once AWS confirms the row; `NULL` until then |
 
