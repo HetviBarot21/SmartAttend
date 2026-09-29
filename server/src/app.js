@@ -5,6 +5,7 @@ import { createSyncRouter } from './routes/sync.js';
 import { createRosterRouter } from './routes/roster.js';
 import { createAdminRouter } from './routes/admin.js';
 import { createSystemAdminRouter } from './routes/systemAdmin.js';
+import { createGateRouter } from './routes/gate.js';
 import {
   getAttendanceForDate,
   getRecentChallenges,
@@ -57,6 +58,10 @@ export function createApp({ db, cardHandler = createCardHandler({ db }), logger 
   // the cross-class/cross-teacher admin reporting built on top of them.
   app.use('/api/roster', createRosterRouter({ db }));
   app.use('/api/admin', createAdminRouter({ db }));
+
+  // Today's gate scans (and any teacher marks) for one class, pulled by the
+  // PWA before roll call so the teacher only handles students who didn't scan.
+  app.use('/api/gate', createGateRouter({ db }));
 
   // Platform-wide school list + activate/deactivate, for the system-admin role.
   app.use('/api/system-admin', createSystemAdminRouter({ db }));
