@@ -86,7 +86,7 @@ the rest of the path to AWS.
 ## Tests
 
 ```bash
-npm test             # jest, 73 tests
+npm test             # jest, 104 tests
 npm run lint          # eslint
 ```
 

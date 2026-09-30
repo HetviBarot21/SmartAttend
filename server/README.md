@@ -70,6 +70,10 @@ All optional - copy `.env.example` to `.env` to override.
 | GET | `/api/stats?date=YYYY-MM-DD` | counts by capture method, challenge outcomes, pending sync |
 | POST | `/api/rfid/scan` | fire one scan now - body `{ "cardUid": "04A1B2C3" }` |
 | POST | `/api/sync` | inbound attendance batch from the offline PWA (see below) |
+| GET | `/api/gate/classes/:id/attendance?date=YYYY-MM-DD` | one class's records for a day (default today) plus `gate.lastScanAt` - the PWA pulls this before roll call (see below) |
+| * | `/api/roster/*` | roster upserts pushed from the PWA (schools, classes, students, cards) |
+| * | `/api/admin/*` | per-school reporting: overview, classes, flagged students, follow-ups |
+| * | `/api/system-admin/*` | platform-wide school list + activate/deactivate |
 
 Valid `cardUid` values are the 10 seeded cards: `04A1B2C3`, `04D4E5F6`,
 `0417A8B9`, `04C2D3E4`, `0455667788`, `04998877`, `04AABBCC`, `04DDEEFF`,
@@ -95,7 +99,9 @@ Two halves, both backed by `sync_queue`:
 
 **Inbound** — `POST /api/sync` (`src/routes/sync.js`). The offline PWA posts a
 batch `{ deviceId, records: [...] }`; the whole batch is validated against
-`src/schemas/attendanceSync.schema.js`. Each record is deduplicated on `eventId`
+`src/schemas/attendanceSync.schema.js`. A record may carry an optional absence
+`reason` (`fee`, `health`, `other`, `unknown`); it is kept only on absences, and a
+reason added later to an existing absence counts as an update. Each record is deduplicated on `eventId`
 and on `(studentId, date)` — re-sent records are reported as skipped, not errors,
 so the PWA can safely retry whole batches. Survivors land in `attendance_events`
 (`source = 'client'`) and `sync_queue`, one transaction each. Responds `200` with
@@ -113,20 +119,31 @@ idles.
 With no real AWS yet, point `SYNC_API_GATEWAY_URL` at a local shim around
 `../aws/lambda/syncHandler.js`.
 
+## Gate → PWA
+
+`GET /api/gate/classes/:id/attendance` (`src/routes/gate.js`) returns every
+record the server holds for one class on one day - gate scans and teacher
+marks - in the field names the PWA's local database uses, keeping the server's
+`eventId`. The PWA stores them as already synced, so they are never pushed
+back. `gate.lastScanAt` is when the RFID/fingerprint hardware last recorded
+anyone; the PWA uses it to tell "gate working" from "gate down - take a full
+roll call". Unknown class → 404; malformed `date` → 400.
+
 ## Schema
 
-8 tables, defined in `src/db/schema.sql` (`CREATE TABLE IF NOT EXISTS`, so it's
+9 tables, defined in `src/db/schema.sql` (`CREATE TABLE IF NOT EXISTS`, so it's
 safe to run on every boot). Full description in `../docs/schema.md`.
 
 - `schools` -> `class_groups` -> `students` -> `rfid_cards`
 - `students` -> `attendance_events` -> `sync_queue` -> (`syncWorker.js`) -> AWS
 - `attendance_events` / `students` -> `fingerprint_challenges`
+- `students` -> `follow_ups` (contact attempts for flagged students)
 - `audit_log` - standalone (action / actor / record / detail / timestamp)
 
 ## Tests
 
 ```bash
-npm test             # node --test, 39 tests
+npm test             # node --test, 79 tests
 ```
 
 Covers: all 8 tables created, seed correctness, attendance write + atomicity,
@@ -134,12 +151,13 @@ duplicate prevention (same student/date, reused `event_id`), capture-method
 values, the RFID emitter timing (mocked timers), the fingerprint distribution,
 the full scan-to-SQLite handler including the ~25% challenge rate, the
 `POST /api/sync` ingest (validation, both dedup paths, mixed batches, unknown
-student), and the sync worker's backoff / batching / cloud-response handling.
+student, absence reasons), the gate endpoint, the roster/admin routes, the
+risk model, and the sync worker's backoff / batching / cloud-response handling.
 
 ## Not built yet
 
-- Risk scoring / ML (deferred - schema keeps `attendance_events` append-only so
-  the history is there when it's needed)
+- Absence reasons in the risk score: `src/lib/riskModel.js` still sets the fee
+  and illness features to 0
 - Real Cognito-verified requests
 - Real AWS: `syncWorker.js` targets `SYNC_API_GATEWAY_URL`; until that's a
   deployed endpoint, point it at a local shim around `../aws/lambda/syncHandler.js`
