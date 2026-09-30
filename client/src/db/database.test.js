@@ -27,6 +27,7 @@ import {
   addFollowUp,
   getFollowUpsForStudent,
   getFollowUpSummary,
+  applyGateRecords,
 } from './database';
 
 const DATE = '2026-08-27';
@@ -517,5 +518,118 @@ describe('todayISO', () => {
   it('formats a local date as YYYY-MM-DD without a UTC shift', () => {
     expect(todayISO(new Date(2026, 7, 27, 1, 30))).toBe('2026-08-27');
     expect(todayISO(new Date(2026, 0, 1, 23, 45))).toBe('2026-01-01');
+  });
+});
+
+describe('absence reasons', () => {
+  it('stores a reason on an absence', async () => {
+    const record = await addAttendanceEvent({ studentId: 'stu-1', date: DATE, status: 'absent', reason: 'fee' });
+    expect(record.reason).toBe('fee');
+    expect((await db.attendanceEvents.get({ eventId: record.eventId })).reason).toBe('fee');
+  });
+
+  it('drops a reason given with a non-absent status', async () => {
+    const record = await addAttendanceEvent({ studentId: 'stu-1', date: DATE, status: 'present', reason: 'health' });
+    expect(record.reason).toBeNull();
+  });
+
+  it('rejects a reason outside the fixed list', async () => {
+    await expect(
+      addAttendanceEvent({ studentId: 'stu-1', date: DATE, status: 'absent', reason: 'lazy' }),
+    ).rejects.toThrow(/reason must be one of/);
+  });
+
+  it('adding a reason later is an update that re-queues the record', async () => {
+    const first = await setAttendance({ studentId: 'stu-1', date: DATE, status: 'absent' });
+    await db.syncQueue.where('eventId').equals(first.record.eventId).modify({ status: 'synced' });
+
+    const second = await setAttendance({ studentId: 'stu-1', date: DATE, status: 'absent', reason: 'health' });
+    expect(second.changed).toBe(true);
+    expect(second.record.eventId).toBe(first.record.eventId);
+    expect(second.record.reason).toBe('health');
+    expect((await db.syncQueue.where('eventId').equals(first.record.eventId).first()).status).toBe('pending');
+  });
+
+  it('correcting absent -> present clears the reason', async () => {
+    await setAttendance({ studentId: 'stu-1', date: DATE, status: 'absent', reason: 'fee' });
+    const { record } = await setAttendance({ studentId: 'stu-1', date: DATE, status: 'present' });
+    expect(record.reason).toBeNull();
+  });
+
+  it('the same status and reason again is unchanged', async () => {
+    await setAttendance({ studentId: 'stu-1', date: DATE, status: 'absent', reason: 'fee' });
+    const again = await setAttendance({ studentId: 'stu-1', date: DATE, status: 'absent', reason: 'fee' });
+    expect(again.changed).toBe(false);
+  });
+});
+
+describe("applyGateRecords - merging the gate server's records", () => {
+  const gateScan = (over = {}) => ({
+    eventId: '11111111-1111-4111-8111-111111111111',
+    studentId: 'stu-1',
+    date: DATE,
+    status: 'present',
+    captureMethod: 'rfid',
+    verified: false,
+    recordedBy: null,
+    reason: null,
+    source: 'simulation',
+    createdAt: '2026-08-27T04:12:00Z',
+    ...over,
+  });
+
+  it('stores a new gate scan as already synced, with no queue row', async () => {
+    const out = await applyGateRecords([gateScan()]);
+    expect(out.added).toEqual(['stu-1']);
+
+    const stored = await db.attendanceEvents.get({ eventId: gateScan().eventId });
+    expect(stored.status).toBe('present');
+    expect(stored.captureMethod).toBe('rfid');
+    expect(stored.syncedAt).toEqual(expect.any(String));
+    expect(await countPendingSync()).toBe(0);
+  });
+
+  it('is idempotent - pulling the same records twice changes nothing', async () => {
+    await applyGateRecords([gateScan()]);
+    const out = await applyGateRecords([gateScan()]);
+    expect(out).toEqual({ added: [], updated: [], replaced: [] });
+    expect(await db.attendanceEvents.count()).toBe(1);
+  });
+
+  it("takes the server's newer content for a record it already has", async () => {
+    await applyGateRecords([gateScan({ status: 'absent', captureMethod: 'manual' })]);
+    const out = await applyGateRecords([gateScan({ status: 'absent', captureMethod: 'manual', reason: 'fee' })]);
+    expect(out.updated).toEqual(['stu-1']);
+    expect((await db.attendanceEvents.get({ eventId: gateScan().eventId })).reason).toBe('fee');
+  });
+
+  it('keeps a local edit that is still waiting to sync', async () => {
+    await applyGateRecords([gateScan()]);
+    await setAttendance({ studentId: 'stu-1', date: DATE, status: 'late' }); // queued, not yet sent
+
+    const out = await applyGateRecords([gateScan()]); // server still says present
+    expect(out.updated).toEqual([]);
+    expect((await db.attendanceEvents.get({ eventId: gateScan().eventId })).status).toBe('late');
+  });
+
+  it('the gate wins over a different offline mark, and reports it', async () => {
+    const local = await addAttendanceEvent({ studentId: 'stu-1', date: DATE, status: 'absent', reason: 'fee' });
+
+    const out = await applyGateRecords([gateScan({ captureMethod: 'fingerprint', verified: true })]);
+    expect(out.replaced).toEqual([{
+      studentId: 'stu-1',
+      localStatus: 'absent',
+      serverStatus: 'present',
+      captureMethod: 'fingerprint',
+      createdAt: '2026-08-27T04:12:00Z',
+    }]);
+
+    const rows = await db.attendanceEvents.where('[studentId+date]').equals(['stu-1', DATE]).toArray();
+    expect(rows).toHaveLength(1);
+    expect(rows[0].eventId).toBe(gateScan().eventId);
+    expect(rows[0].verified).toBe(true);
+    // the replaced mark will never be sent
+    expect(await db.syncQueue.where('eventId').equals(local.eventId).count()).toBe(0);
+    expect(await countPendingSync()).toBe(0);
   });
 });

@@ -565,6 +565,33 @@ input  { font-family: inherit; }
 .pal__btn[aria-pressed="true"][data-status="late"]    { background: var(--late);    color: #fff; }
 .pal__btn:disabled { cursor: default; }
 
+/* a non-absent row keeps its original single-line flex layout */
+.roll-row__contents { display: contents; }
+
+/* absence-reason chips, shown under a row marked absent */
+.reasons { display: flex; flex-wrap: wrap; gap: 6px; padding-left: 43px; }
+.reasons__chip {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: var(--ink-soft);
+  cursor: pointer;
+}
+.reasons__chip[aria-pressed="true"] { background: var(--absent); border-color: var(--absent); color: #fff; }
+.reasons__chip:focus-visible { outline: 2px solid var(--indigo-600); outline-offset: 1px; }
+.reasons__chip:disabled { cursor: default; }
+
+/* gate status banner above the roll call */
+.gate-banner { display: flex; align-items: center; gap: 10px; }
+.gate-banner > span { flex: 1; min-width: 0; }
+.gate-banner__action { min-height: 32px; padding: 0 12px; flex-shrink: 0; }
+.notice > .gate-banner__action { margin-top: 8px; }
+
 /* sticky footer above the nav: pending-sync line + submit */
 .rollbar {
   position: fixed;
