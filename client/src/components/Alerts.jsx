@@ -1,23 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
-import { getStudentsByClass, getClassHistory, getFollowUpSummary } from '../db/database';
-import {
-  computeFeatures,
-  scoreRiskML,
-  riskInsights,
-  riskHeadline,
-  isAssessable,
-  toISO,
-} from '../lib/riskModel';
+import { useState } from 'react';
+import { riskInsights, riskHeadline } from '../lib/riskModel';
+import { useClassRisk } from '../hooks/useClassRisk';
 import Avatar from './Avatar';
-import { AlertTriangleIcon, ArrowRightIcon, PhoneIcon, MailIcon } from './icons';
+import { ChevronRightIcon, PhoneIcon } from './icons';
 
-const HISTORY_DAYS = 63; // covers the 6-week trend and the feature windows
-
-function daysAgoISO(n) {
-  const dt = new Date();
-  dt.setDate(dt.getDate() - n);
-  return toISO(dt);
-}
+const RISK_TEXT = { red: 'High', amber: 'Medium' };
 
 function fmtDaysAgo(iso) {
   const days = Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000);
@@ -27,124 +14,156 @@ function fmtDaysAgo(iso) {
 }
 
 export default function Alerts({ classGroupId, className, onOpenProfile }) {
-  const [students, setStudents] = useState([]);
-  const [history, setHistory] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [followUp, setFollowUp] = useState({ lastAt: new Map(), needsFollowUp: new Set() });
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      const [roll, rows] = await Promise.all([
-        getStudentsByClass(classGroupId),
-        getClassHistory(classGroupId, daysAgoISO(HISTORY_DAYS)),
-      ]);
-      if (cancelled) return;
-      setStudents(roll);
-      setHistory(rows);
-      setLoading(false);
-    })();
-    return () => { cancelled = true; };
-  }, [classGroupId]);
-
-  const flagged = useMemo(() => {
-    const asOf = toISO(new Date());
-    const byStudent = new Map();
-    for (const r of history) {
-      if (!byStudent.has(r.studentId)) byStudent.set(r.studentId, []);
-      byStudent.get(r.studentId).push({ date: r.date, status: r.status });
-    }
-    return students
-      .map((student) => {
-        const rows = byStudent.get(student.studentId) ?? [];
-        const features = computeFeatures(rows, asOf);
-        const risk = scoreRiskML(rows, asOf);
-        return { student, features, risk, rows, assessable: isAssessable(rows) };
-      })
-      .filter((r) => r.assessable && r.risk.flag !== 'green')
-      .sort((a, b) => b.risk.score - a.risk.score);
-  }, [students, history]);
-
-  useEffect(() => {
-    let cancelled = false;
-    getFollowUpSummary(flagged.map((f) => f.student.studentId)).then((summary) => {
-      if (!cancelled) setFollowUp(summary);
-    });
-    return () => { cancelled = true; };
-  }, [flagged]);
+  const { loading, students, flagged, followUp } = useClassRisk(classGroupId);
+  const [level, setLevel] = useState('all');
 
   if (loading) return <p className="empty">Assessing attendance risk…</p>;
 
+  const red = flagged.filter((f) => f.risk.flag === 'red').length;
+  const amber = flagged.length - red;
+  const pending = flagged.filter((f) => !followUp.lastAt.has(f.student.studentId)).length;
+  const shown = level === 'all' ? flagged : flagged.filter((f) => f.risk.flag === level);
+
   return (
     <>
-      <div className="alerts-banner">
-        <span className="alerts-banner__title">Risk Alerts</span>
-        <span className="alerts-banner__flag">
-          <AlertTriangleIcon size={15} />
-          {flagged.length} flagged
-        </span>
+      <div className="page-head">
+        <div>
+          <h2 className="page-head__title">At-risk students</h2>
+          <p className="page-head__sub">
+            {className} · students the ML model predicts may become persistently absent
+          </p>
+        </div>
       </div>
 
-      {flagged.length === 0 ? (
-        <p className="empty">No students flagged this month.</p>
-      ) : (
-        flagged.map(({ student, features, risk, rows }) => {
-          const headline = riskHeadline(risk);
-          const insight = riskInsights(rows, features, risk)[0];
-          return (
-            <article key={student.studentId} className={`alert-card alert-card--${risk.flag}`}>
-              <div className="alert-card__head">
-                <Avatar name={student.fullName} size="md" />
-                <div className="alert-card__id">
-                  <div className="alert-card__name">{student.fullName}</div>
-                  <div className="alert-card__meta">{className} · ID {student.admissionNo}</div>
-                </div>
-                <span className={`pill pill--risk-${risk.flag === 'red' ? 'red' : 'amber'}`}>
-                  {risk.flag === 'red' ? 'RED' : 'AMBER'}
-                </span>
-              </div>
+      <div className="kpis kpis--4">
+        <div className="kpi">
+          <span className="kpi__label">Students assessed</span>
+          <span className="kpi__value">{students.length}</span>
+        </div>
+        <div className="kpi">
+          <span className="kpi__label"><span className="dot dot--absent" />High risk</span>
+          <span className="kpi__value">{red}</span>
+        </div>
+        <div className="kpi">
+          <span className="kpi__label"><span className="dot dot--late" />Medium risk</span>
+          <span className="kpi__value">{amber}</span>
+        </div>
+        <div className="kpi">
+          <span className="kpi__label">Awaiting follow-up</span>
+          <span className="kpi__value">{pending}</span>
+        </div>
+      </div>
 
-              <p className="alert-card__body">{insight}</p>
+      <div className="panel">
+        <div className="panel__toolbar">
+          <div className="chips" role="tablist" aria-label="Filter by risk level">
+            {[
+              { id: 'all', label: 'All flagged', n: flagged.length },
+              { id: 'red', label: 'High risk', n: red },
+              { id: 'amber', label: 'Medium risk', n: amber },
+            ].map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                role="tab"
+                aria-selected={level === c.id}
+                className="chip"
+                onClick={() => setLevel(c.id)}
+              >
+                {c.label}
+                <span className="chip__count">{c.n}</span>
+              </button>
+            ))}
+          </div>
+        </div>
 
-              {(student.guardianPhone || student.guardianEmail) && (
-                <div className="alert-card__contact">
-                  {student.guardianPhone && (
-                    <a href={`tel:${student.guardianPhone}`}><PhoneIcon size={14} /> {student.guardianPhone}</a>
-                  )}
-                  {student.guardianEmail && (
-                    <a href={`mailto:${student.guardianEmail}`}><MailIcon size={14} /> {student.guardianEmail}</a>
-                  )}
-                </div>
-              )}
+        {shown.length === 0 ? (
+          <p className="empty">No students flagged. Everyone in this class is on track.</p>
+        ) : (
+          <div className="table-wrap">
+            <table className="table table--stack risk-table">
+              <thead>
+                <tr>
+                  <th>Student</th>
+                  <th>Risk level</th>
+                  <th>Risk score</th>
+                  <th>Why flagged</th>
+                  <th>Follow-up</th>
+                  <th aria-hidden="true" />
+                </tr>
+              </thead>
+              <tbody>
+                {shown.map(({ student, features, risk, rows }) => {
+                  const headline = riskHeadline(risk);
+                  const insight = riskInsights(rows, features, risk)[0];
+                  const last = followUp.lastAt.get(student.studentId);
+                  return (
+                    <tr
+                      key={student.studentId}
+                      className="row--link"
+                      tabIndex={0}
+                      onClick={() => onOpenProfile?.(student.studentId)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter' || e.key === ' ') {
+                          e.preventDefault();
+                          onOpenProfile?.(student.studentId);
+                        }
+                      }}
+                      aria-label={`Open ${student.fullName}`}
+                    >
+                      <td data-label="Student">
+                        <div className="student-cell student-cell--static">
+                          <Avatar name={student.fullName} size="sm" />
+                          <span className="student-cell__text">
+                            <span className="student-cell__name">{student.fullName}</span>
+                            <span className="student-cell__sub">
+                              {student.admissionNo || '-'}
+                              {student.guardianPhone && (
+                                <a className="inline-link" href={`tel:${student.guardianPhone}`} onClick={(e) => e.stopPropagation()}>
+                                  <PhoneIcon size={12} /> {student.guardianPhone}
+                                </a>
+                              )}
+                            </span>
+                          </span>
+                        </div>
+                      </td>
+                      <td data-label="Risk level">
+                        <span className="risk-level">
+                          <span className={`dot dot--${risk.flag === 'red' ? 'absent' : 'late'}`} />
+                          {RISK_TEXT[risk.flag]}
+                        </span>
+                      </td>
+                      <td data-label="Risk score">
+                        <div className="meter">
+                          <span className="meter__value">{headline.pct}%</span>
+                          <span className="meter__track">
+                            <span className={`meter__fill meter__fill--${risk.flag}`} style={{ width: `${headline.pct}%` }} />
+                          </span>
+                        </div>
+                      </td>
+                      <td data-label="Why flagged" className="cell-wrap">{insight}</td>
+                      <td data-label="Follow-up">
+                        {last ? (
+                          <span className="followup followup--done">Done {fmtDaysAgo(last)}</span>
+                        ) : (
+                          <span className="followup">Not yet</span>
+                        )}
+                      </td>
+                      <td className="cell-chevron" aria-hidden="true">
+                        <ChevronRightIcon size={16} />
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
 
-              <div className="alert-card__foot">
-                <span className="alert-card__risk">
-                  {headline.label}: <b>{headline.pct}%</b>
-                  {followUp.lastAt.has(student.studentId) ? (
-                    <span className="followup-badge followup-badge--done">
-                      · followed up {fmtDaysAgo(followUp.lastAt.get(student.studentId))}
-                    </span>
-                  ) : (
-                    <span className="followup-badge followup-badge--needed"> · not yet followed up</span>
-                  )}
-                </span>
-                <button
-                  type="button"
-                  className={`btn btn--sm${risk.flag === 'red' ? '' : ' btn--ghost'}`}
-                  onClick={() => onOpenProfile?.(student.studentId)}
-                >
-                  Follow up
-                  <ArrowRightIcon size={15} />
-                </button>
-              </div>
-            </article>
-          );
-        })
-      )}
-
-      <p className="card__hint" style={{ textAlign: 'center', marginTop: 16 }}>
-        Flags use the ML risk model.
+      <p className="footnote">
+        Click a student to see their attendance history and log a follow-up. Risk is predicted by the trained ML model from each student&apos;s recent attendance. Students need at least
+        8 recorded school days before they are assessed.
       </p>
     </>
   );

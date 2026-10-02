@@ -1,4 +1,4 @@
-import { startOfWeek, schoolWeek, buildWeeklyHeatmap } from './heatmap';
+import { startOfWeek, schoolWeek, buildWeeklyHeatmap, monthBounds, schoolDaysInRange, buildRegisterGrid } from './heatmap';
 
 describe('startOfWeek', () => {
   it('returns the Monday of the containing week', () => {
@@ -45,5 +45,29 @@ describe('buildWeeklyHeatmap', () => {
     const statuses = rows[0].cells.map((c) => c.status);
     expect(statuses).toEqual(['absent', 'upcoming', 'upcoming', 'upcoming', 'upcoming']);
     expect(rows[0].rate).toBeCloseTo(0); // only Monday is graded
+  });
+});
+
+describe('monthBounds / schoolDaysInRange', () => {
+  it('covers the whole month and keeps only weekdays', () => {
+    expect(monthBounds('2026-09-16')).toEqual({ start: '2026-09-01', end: '2026-09-30' });
+    const days = schoolDaysInRange('2026-09-01', '2026-09-30');
+    expect(days).toHaveLength(22);
+    expect(days[0]).toEqual({ date: '2026-09-01', label: 'Tue' });
+    expect(days.some((d) => d.date === '2026-09-05')).toBe(false); // Saturday
+  });
+});
+
+describe('buildRegisterGrid', () => {
+  it('counts present, late and absent per student', () => {
+    const students = [{ studentId: 's1', fullName: 'Ann A' }];
+    const records = [
+      { studentId: 's1', date: '2026-09-07', status: 'present' },
+      { studentId: 's1', date: '2026-09-08', status: 'late' },
+    ];
+    const days = schoolDaysInRange('2026-09-07', '2026-09-09');
+    const { rows } = buildRegisterGrid(students, records, days, '2026-09-10');
+    expect(rows[0].totals).toEqual({ present: 1, late: 1, absent: 1 });
+    expect(rows[0].rate).toBeCloseTo(2 / 3);
   });
 });

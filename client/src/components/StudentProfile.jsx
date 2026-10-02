@@ -9,16 +9,14 @@ import {
   toISO,
 } from '../lib/riskModel';
 import Avatar from './Avatar';
-import TopBar from './TopBar';
 import FollowUpPanel from './FollowUpPanel';
-import { ChevronDownIcon } from './icons';
+import { ChevronLeftIcon, ChevronRightIcon } from './icons';
 
-const RISK_LABEL = { red: 'HIGH RISK', amber: 'AT RISK', green: 'ON TRACK' };
+const RISK_LABEL = { red: 'High risk', amber: 'Medium risk', green: 'On track' };
 const RISK_TAKEAWAY = {
   red: 'Likely to keep missing school without a check-in.',
   amber: 'Attendance has slipped. Worth a check-in soon.',
 };
-const INITIAL_HISTORY = 8;
 
 function trendLabel(trend) {
   if (trend == null) return null;
@@ -37,12 +35,10 @@ function fmtDate(iso) {
 }
 
 function TrendChart({ points }) {
-  const w = 300;
+  const w = 440;
   const h = 120;
-  const pad = 24;
-  const vals = points.map((p) => p.rate);
-  const known = vals.filter((v) => v != null);
-  const min = known.length ? Math.min(...known, 0.5) : 0;
+  const pad = 32;
+  const min = 0;
   const max = 1;
   const x = (i) => pad + (i * (w - pad * 2)) / Math.max(1, points.length - 1);
   const y = (v) => h - pad - ((v - min) / (max - min || 1)) * (h - pad * 2);
@@ -54,7 +50,12 @@ function TrendChart({ points }) {
 
   return (
     <svg className="trend-chart" viewBox={`0 0 ${w} ${h}`} role="img" aria-label="Six week attendance trend">
-      <line x1={pad} y1={h - pad} x2={w - pad} y2={h - pad} stroke="var(--line)" strokeWidth="1" />
+      {[0, 0.5, 1].map((v) => (
+        <g key={v}>
+          <line x1={pad} y1={y(v)} x2={w - pad / 2} y2={y(v)} stroke="var(--line)" strokeWidth="1" strokeDasharray={v ? '3 3' : undefined} />
+          <text className="trend-axis" x={pad - 4} y={y(v) + 3} textAnchor="end">{v * 100}%</text>
+        </g>
+      ))}
       {line && <polyline points={line} fill="none" stroke="var(--slate-700)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" />}
       {points.map((p, i) =>
         p.rate == null ? null : (
@@ -70,20 +71,111 @@ function TrendChart({ points }) {
   );
 }
 
-function ProfilePage({ title, onBack, children }) {
+const CAL_CODE = { present: 'P', late: 'L', absent: 'A' };
+const CAL_TEXT = { present: 'Present', late: 'Late', absent: 'Absent' };
+
+function addMonths(iso, n) {
+  const [y, m] = iso.split('-').map(Number);
+  return toISO(new Date(y, m - 1 + n, 1));
+}
+
+/** Month calendar of school days (Mon-Fri) with the student's status on each. */
+function AttendanceCalendar({ history }) {
+  const today = toISO(new Date());
+  const [month, setMonth] = useState(() => `${today.slice(0, 7)}-01`);
+  const byDate = useMemo(() => new Map(history.map((r) => [r.date, r.status])), [history]);
+  const first = history.length ? history[0].date.slice(0, 7) : today.slice(0, 7);
+
+  const [y, m] = month.split('-').map(Number);
+  const daysInMonth = new Date(y, m, 0).getDate();
+  const weeks = [];
+  let week = null;
+  for (let d = 1; d <= daysInMonth; d += 1) {
+    const dt = new Date(y, m - 1, d);
+    const dow = dt.getDay();
+    if (dow === 0 || dow === 6) continue;
+    if (!week || dow === 1) {
+      week = Array(5).fill(null);
+      weeks.push(week);
+    }
+    week[dow - 1] = toISO(dt);
+  }
+
+  const monthCounts = { present: 0, late: 0, absent: 0 };
+  for (const w of weeks) for (const iso of w) if (iso && byDate.has(iso)) monthCounts[byDate.get(iso)] += 1;
+  const label = new Date(y, m - 1, 1).toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+
   return (
-    <div className="app">
-      <TopBar title={title} onBack={onBack} />
-      <div className="app__scroll">{children}</div>
+    <div className="att-cal">
+      <div className="panel__head">
+        <div>
+          <h3 className="panel__title">Attendance calendar</h3>
+          <p className="panel__sub">
+            {monthCounts.present} present · {monthCounts.late} late · {monthCounts.absent} absent this month
+          </p>
+        </div>
+        <div className="period-nav">
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => setMonth((v) => addMonths(v, -1))}
+            disabled={month.slice(0, 7) <= first}
+            aria-label="Previous month"
+          >
+            <ChevronLeftIcon size={16} />
+          </button>
+          <span className="period-nav__label">{label}</span>
+          <button
+            type="button"
+            className="icon-btn"
+            onClick={() => setMonth((v) => addMonths(v, 1))}
+            disabled={month.slice(0, 7) >= today.slice(0, 7)}
+            aria-label="Next month"
+          >
+            <ChevronRightIcon size={16} />
+          </button>
+        </div>
+      </div>
+
+      <table className="att-cal__grid">
+        <thead>
+          <tr>{['Mon', 'Tue', 'Wed', 'Thu', 'Fri'].map((d) => <th key={d}>{d}</th>)}</tr>
+        </thead>
+        <tbody>
+          {weeks.map((w, i) => (
+            <tr key={i}>
+              {w.map((iso, j) => {
+                if (!iso) return <td key={j} />;
+                const status = byDate.get(iso);
+                const future = iso > today;
+                return (
+                  <td key={j} className={`${iso === today ? 'is-today' : ''}${future ? ' is-future' : ''}`}>
+                    <span className="att-cal__day">{Number(iso.slice(8, 10))}</span>
+                    <span
+                      className={`reg-code reg-code--${status ?? 'upcoming'}`}
+                      title={status ? CAL_TEXT[status] : future ? 'Upcoming' : 'No record'}
+                    >
+                      {status ? CAL_CODE[status] : '-'}
+                    </span>
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
     </div>
   );
 }
 
-export default function StudentProfile({ studentId, className, onBack }) {
+function ProfilePage({ children }) {
+  return <div className="profile-page">{children}</div>;
+}
+
+export default function StudentProfile({ studentId, className }) {
   const [student, setStudent] = useState(null);
   const [history, setHistory] = useState([]);
   const [loading, setLoading] = useState(true);
-  const [showAll, setShowAll] = useState(false);
   const [followUp, setFollowUp] = useState({ lastAt: new Map() });
 
   useEffect(() => {
@@ -116,130 +208,139 @@ export default function StudentProfile({ studentId, className, onBack }) {
     return { features, risk, trend, insights, assessable: isAssessable(rows) };
   }, [history]);
 
-  if (loading) return <ProfilePage title="Profile" onBack={onBack}><p className="empty">Loading profile…</p></ProfilePage>;
-  if (!student) return <ProfilePage title="Profile" onBack={onBack}><p className="empty">Student not found.</p></ProfilePage>;
+  if (loading) return <ProfilePage><p className="empty">Loading profile…</p></ProfilePage>;
+  if (!student) return <ProfilePage><p className="empty">Student not found.</p></ProfilePage>;
 
   const { risk, trend, insights, features, assessable } = model;
   const enrolled = student.enrolledAt ? fmtDate(student.enrolledAt).long : '-';
-  const recent = [...history].reverse();
-  const shown = showAll ? recent : recent.slice(0, INITIAL_HISTORY);
-
-  const heroVariant = assessable ? risk.flag : 'new';
+  const counts = { present: 0, late: 0, absent: 0 };
+  for (const r of history) if (r.status in counts) counts[r.status] += 1;
+  const recorded = counts.present + counts.late + counts.absent;
+  const overallRate = recorded ? (counts.present + counts.late) / recorded : null;
+  const flagged = assessable && risk.flag !== 'green';
+  const lastFollowUp = followUp.lastAt.get(studentId);
 
   return (
-    <ProfilePage title={student.fullName} onBack={onBack}>
-      <div className={`profile-hero-card profile-hero-card--${heroVariant}`}>
-        <div className="profile-hero-card__top">
-          <Avatar name={student.fullName} size="lg" className="avatar--on-hero" />
-          <div className="profile-hero-card__id">
-            <div className="profile-hero-card__name">{student.fullName}</div>
-            <div className="profile-hero-card__meta">{className} · Adm {student.admissionNo || '-'}</div>
-            <div className="profile-hero-card__meta profile-hero-card__meta--sub">
-              {student.cardUid ? `Card ${student.cardUid}` : 'No card issued'} · Since {enrolled}
+    <ProfilePage>
+      <section className="panel panel--pad profile-head">
+        <Avatar name={student.fullName} size="lg" />
+        <div className="profile-head__id">
+          <h2 className="profile-head__name">{student.fullName}</h2>
+          <p className="profile-head__meta">
+            <span>Adm. No. <b>{student.admissionNo || '-'}</b></span>
+            <span>Class <b>{className}</b></span>
+            <span>Card <b>{student.cardUid || 'not issued'}</b></span>
+            <span>Enrolled <b>{enrolled}</b></span>
+          </p>
+        </div>
+        <div className="profile-head__status">
+          {assessable ? (
+            <span className={`risk-tag risk-tag--${risk.flag}`}>
+              <span className={`dot dot--${risk.flag === 'red' ? 'absent' : risk.flag === 'amber' ? 'late' : 'present'}`} />
+              {RISK_LABEL[risk.flag]}
+            </span>
+          ) : (
+            <span className="risk-tag">Not yet assessed</span>
+          )}
+          {flagged && (
+            <span className="profile-head__followup">
+              {lastFollowUp
+                ? `Followed up ${new Date(lastFollowUp).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`
+                : 'Not yet followed up'}
+            </span>
+          )}
+        </div>
+      </section>
+
+      <div className="stat-strip stat-strip--6">
+        <div>
+          <span className="stat-strip__label">Attendance (all records)</span>
+          <span className="stat-strip__value">{overallRate == null ? '-' : `${Math.round(overallRate * 100)}%`}</span>
+        </div>
+        <div>
+          <span className="stat-strip__label">Last 2 weeks</span>
+          <span className="stat-strip__value">
+            {features.attendance_rate_w1 == null ? '-' : `${Math.round(features.attendance_rate_w1 * 100)}%`}
+          </span>
+        </div>
+        <div>
+          <span className="stat-strip__label">Days present</span>
+          <span className="stat-strip__value">{counts.present}</span>
+        </div>
+        <div>
+          <span className="stat-strip__label">Days late</span>
+          <span className="stat-strip__value">{counts.late}</span>
+        </div>
+        <div>
+          <span className="stat-strip__label">Days absent</span>
+          <span className="stat-strip__value">{counts.absent}</span>
+        </div>
+        <div>
+          <span className="stat-strip__label">Trend</span>
+          <span className="stat-strip__value">{trendLabel(features.attendance_trend) ?? '-'}</span>
+        </div>
+      </div>
+
+      <div className="profile-grid">
+        <div className="profile-grid__main">
+          <section className="panel panel--pad">
+            <AttendanceCalendar history={history} />
+          </section>
+
+          <section className="panel panel--pad">
+            <div className="panel__head">
+              <div>
+                <h3 className="panel__title">Weekly attendance</h3>
+                <p className="panel__sub">Share of school days attended, last 6 weeks</p>
+              </div>
             </div>
-          </div>
-          <span className="pill pill--on-hero">{assessable ? RISK_LABEL[risk.flag] : 'NEW'}</span>
+            <TrendChart points={trend} />
+          </section>
         </div>
 
-        {assessable ? (
-          <>
-            <div className="profile-hero-card__stat">
-              <span className="profile-hero-card__pct">{Math.round(risk.dropoutProbability * 100)}%</span>
-              <span className="profile-hero-card__pct-label">risk of continued absence</span>
-              {RISK_TAKEAWAY[risk.flag] && <p className="profile-hero-card__takeaway">{RISK_TAKEAWAY[risk.flag]}</p>}
-            </div>
-
-            <div className="hero-facts">
-              {features.attendance_rate_w1 != null && (
-                <div className="hero-fact">
-                  <b>{Math.round(features.attendance_rate_w1 * 100)}%</b>
-                  <span>present, 2wk</span>
+        <aside className="profile-grid__side">
+          <section className="panel panel--pad">
+            <h3 className="panel__title">Absenteeism risk</h3>
+            {assessable ? (
+              <>
+                <div className="risk-score">
+                  <span className="risk-score__value">{Math.round(risk.dropoutProbability * 100)}%</span>
+                  <span className="risk-score__label">predicted chance of continued absence</span>
                 </div>
-              )}
-              <div className="hero-fact">
-                <b>{features.longest_absence_streak}</b>
-                <span>day{features.longest_absence_streak === 1 ? '' : 's'} streak</span>
-              </div>
-              {trendLabel(features.attendance_trend) && (
-                <div className="hero-fact">
-                  <b>{trendLabel(features.attendance_trend)}</b>
-                  <span>trend</span>
+                <div className="meter__track risk-score__track">
+                  <span
+                    className={`meter__fill meter__fill--${risk.flag === 'red' ? 'red' : 'amber'}`}
+                    style={{ width: `${Math.round(risk.dropoutProbability * 100)}%` }}
+                  />
                 </div>
-              )}
-            </div>
-
-            {risk.flag !== 'green' && (
-              <div className="profile-hero-card__followup">
-                {followUp.lastAt.has(studentId)
-                  ? `Followed up ${new Date(followUp.lastAt.get(studentId)).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })}`
-                  : 'Not yet followed up'}
-              </div>
+                {RISK_TAKEAWAY[risk.flag] && <p className="risk-score__takeaway">{RISK_TAKEAWAY[risk.flag]}</p>}
+                {flagged && insights.length > 0 && (
+                  <>
+                    <h4 className="panel__subtitle">Why flagged</h4>
+                    <ul className="reason-list">
+                      {insights.map((text, i) => (
+                        <li key={i} className={`reason-list__item reason-list__item--${risk.flag}`}>{text}</li>
+                      ))}
+                    </ul>
+                  </>
+                )}
+              </>
+            ) : (
+              <p className="panel__sub" style={{ marginTop: 8 }}>
+                Not enough attendance yet to assess risk. A prediction appears after about two weeks of records.
+              </p>
             )}
-          </>
-        ) : (
-          <p className="profile-hero-card__takeaway profile-hero-card__takeaway--standalone">
-            Not enough attendance yet to assess risk. A flag appears after about two weeks.
-          </p>
-        )}
-      </div>
+          </section>
 
-      {assessable && risk.flag !== 'green' && (
-        <FollowUpPanel
-          studentId={studentId}
-          flag={risk.flag}
-          student={student}
-          onStudentUpdated={(updated) => setStudent((s) => ({ ...s, ...updated }))}
-        />
-      )}
-
-      {assessable && insights.length > 0 && (
-      <div className="card">
-        <h2 className="card__title">Why this is happening</h2>
-        <ul className="reason-list">
-          {insights.map((text, i) => (
-            <li key={i} className={`reason-list__item reason-list__item--${risk.flag}`}>{text}</li>
-          ))}
-        </ul>
-      </div>
-      )}
-
-      <div className="card">
-        <h2 className="card__title">6-week trend</h2>
-        <p className="card__hint">Weekly attendance rate</p>
-        <TrendChart points={trend} />
-      </div>
-
-      <div className="card">
-        <h2 className="card__title">Attendance history</h2>
-        {recent.length === 0 ? (
-          <p className="empty" style={{ padding: '12px 0' }}>No records yet.</p>
-        ) : (
-          <>
-            {shown.map((r) => {
-              const d = fmtDate(r.date);
-              return (
-                <div key={r.eventId ?? r.date} className="history-row">
-                  <span className="history-row__date">
-                    <b>{d.long}</b>
-                    <span>{d.weekday}</span>
-                  </span>
-                  <span className={`pill pill--${r.status}`}>{r.status}</span>
-                </div>
-              );
-            })}
-            {recent.length > INITIAL_HISTORY && (
-              <button
-                type="button"
-                className="linkbtn"
-                style={{ display: 'flex', alignItems: 'center', gap: 4, margin: '10px auto 0' }}
-                onClick={() => setShowAll((v) => !v)}
-              >
-                {showAll ? 'Show fewer' : 'View older records'}
-                <ChevronDownIcon size={14} />
-              </button>
-            )}
-          </>
-        )}
+          {flagged && (
+            <FollowUpPanel
+              studentId={studentId}
+              flag={risk.flag}
+              student={student}
+              onStudentUpdated={(updated) => setStudent((s) => ({ ...s, ...updated }))}
+            />
+          )}
+        </aside>
       </div>
     </ProfilePage>
   );

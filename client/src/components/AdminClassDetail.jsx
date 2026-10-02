@@ -2,12 +2,11 @@ import { useCallback, useEffect, useState } from 'react';
 import { getClassStudents, getSchoolFlagged } from '../services/adminService';
 import { useAuth } from '../auth/AuthContext';
 import Avatar from './Avatar';
-import TopBar from './TopBar';
 
 const RISK_LABEL = { red: 'RED', amber: 'AMBER' };
 
 /** Read-only view of one class and its flagged students, for admins. */
-export default function AdminClassDetail({ classGroupId, onBack }) {
+export default function AdminClassDetail({ classGroupId }) {
   const { user } = useAuth();
   const [data, setData] = useState(null);
   const [flagged, setFlagged] = useState([]);
@@ -33,9 +32,11 @@ export default function AdminClassDetail({ classGroupId, onBack }) {
   const title = data ? [data.class.grade, data.class.stream].filter(Boolean).join(' ') || 'Class' : 'Class';
 
   return (
-    <div className="app">
-      <TopBar title={title} onBack={onBack} />
-      <div className="app__scroll">
+    <>
+      <div className="page-head">
+        <h2 className="page-head__title">{title}</h2>
+      </div>
+      <div>
         {error && <p className="empty">Could not load this class ({error}).</p>}
         {!error && !data && <p className="empty">Loading…</p>}
         {data && (
@@ -68,6 +69,6 @@ export default function AdminClassDetail({ classGroupId, onBack }) {
           </>
         )}
       </div>
-    </div>
+    </>
   );
 }

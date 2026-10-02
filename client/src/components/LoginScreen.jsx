@@ -3,7 +3,14 @@ import { useAuth } from '../auth/AuthContext';
 import { useOnlineStatus } from '../hooks/useOnlineStatus';
 import {
   CapIcon, MailIcon, LockIcon, EyeIcon, EyeOffIcon, KeypadIcon, UserIcon,
+  CheckCircleIcon, SyncIcon, BellIcon,
 } from './icons';
+
+const FEATURES = [
+  { Icon: CheckCircleIcon, title: 'One-tap class register', text: 'Everyone starts present. Untick who is absent and save.' },
+  { Icon: BellIcon, title: 'Early warning', text: 'An ML model flags students at risk of persistent absenteeism.' },
+  { Icon: SyncIcon, title: 'Works offline', text: 'Records save on the device and sync when there is a connection.' },
+];
 
 /**
  * Views: signin, signup, and confirm (the Cognito email code, never shown in
@@ -25,7 +32,6 @@ export default function LoginScreen() {
   const [error, setError] = useState(null);
   const [notice, setNotice] = useState(null);
   const [busy, setBusy] = useState(false);
-  const [pinHint, setPinHint] = useState(false);
 
   const blocked = cognitoConfigured && !online && view !== 'confirm';
 
@@ -103,12 +109,35 @@ export default function LoginScreen() {
   );
 
   return (
-    <div className="auth">
+    <div className="auth auth--split">
+      <aside className="auth__aside">
+        <div className="auth__aside-brand">
+          <span className="auth__aside-logo"><CapIcon size={20} /></span>
+          SmartAttend
+        </div>
+        <div className="auth__aside-body">
+          <h2 className="auth__aside-title">Attendance management for Kenyan secondary schools</h2>
+          <ul className="auth__features">
+            {FEATURES.map(({ Icon, title, text }) => (
+              <li key={title}>
+                <span className="auth__feature-icon"><Icon size={18} /></span>
+                <span>
+                  <b>{title}</b>
+                  <span>{text}</span>
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+        <p className="auth__aside-foot">SmartAttend AI</p>
+      </aside>
+
+      <main className="auth__main">
       {view === 'signin' && (
         <form className="auth__card" onSubmit={handleSignIn}>
           <div className="auth__logo"><CapIcon size={24} /></div>
-          <h1 className="auth__brand">SmartAttend AI</h1>
-          <p className="auth__tagline">Sign in to continue</p>
+          <h1 className="auth__brand">Welcome back</h1>
+          <p className="auth__tagline">Sign in to your SmartAttend account</p>
 
           {blocked && (
             <div className="notice notice--warn" role="status">
@@ -158,7 +187,7 @@ export default function LoginScreen() {
           </div>
 
           <button className="btn" type="submit" disabled={busy || blocked}>
-            {busy ? 'Signing in…' : 'Sign In'}
+            {busy ? 'Signing in…' : 'Sign in'}
           </button>
 
           <p className="auth__switch">
@@ -168,29 +197,15 @@ export default function LoginScreen() {
             </button>
           </p>
 
-          <div className="auth__divider">or</div>
-
-          <button
-            type="button"
-            className="btn btn--secondary"
-            onClick={() => setPinHint(true)}
-          >
-            <KeypadIcon size={18} />
-            Use PIN offline
-          </button>
-
-          {pinHint && (
-            <p className="devnote" role="status">
-              Unlocks SmartAttend automatically once a session expires offline. Sign in online once first.
-            </p>
-          )}
+          <p className="auth__offline">
+            <KeypadIcon size={15} />
+            <span>No network? After you have signed in once, you can unlock the app with your offline PIN.</span>
+          </p>
 
           {!cognitoConfigured && (
             <p className="devnote">
-              <strong>Local authentication mode.</strong> No Cognito user pool is configured,
-              so any email and password creates a device-local session. Set
-              <code> VITE_COGNITO_USER_POOL_ID </code> and <code> VITE_COGNITO_CLIENT_ID </code>
-              to authenticate against AWS.
+              <strong>Demo mode:</strong> any email and password signs in on this device.
+              Set <code>VITE_COGNITO_USER_POOL_ID</code> and <code>VITE_COGNITO_CLIENT_ID</code> to use AWS Cognito.
             </p>
           )}
         </form>
@@ -200,7 +215,7 @@ export default function LoginScreen() {
         <form className="auth__card" onSubmit={handleSignUp}>
           <div className="auth__logo"><CapIcon size={24} /></div>
           <h1 className="auth__brand">Create your account</h1>
-          <p className="auth__tagline">Set up SmartAttend on this device</p>
+          <p className="auth__tagline">Set up SmartAttend for your school</p>
 
           {blocked && (
             <div className="notice notice--warn" role="status">
@@ -343,7 +358,7 @@ export default function LoginScreen() {
           </div>
 
           <button className="btn" type="submit" disabled={busy || blocked}>
-            {busy ? 'Creating account…' : 'Create Account'}
+            {busy ? 'Creating account…' : 'Create account'}
           </button>
 
           <p className="auth__switch">
@@ -355,7 +370,7 @@ export default function LoginScreen() {
 
           {!cognitoConfigured && (
             <p className="devnote">
-              <strong>Local authentication mode.</strong> Saved on this device, no email verification.
+              <strong>Demo mode:</strong> the account is saved on this device, with no email verification.
             </p>
           )}
         </form>
@@ -390,7 +405,7 @@ export default function LoginScreen() {
           </div>
 
           <button className="btn" type="submit" disabled={busy || code.length === 0}>
-            {busy ? 'Verifying…' : 'Verify & Sign In'}
+            {busy ? 'Verifying…' : 'Verify and sign in'}
           </button>
 
           <div className="auth__foot">
@@ -403,6 +418,7 @@ export default function LoginScreen() {
           </div>
         </form>
       )}
+      </main>
     </div>
   );
 }

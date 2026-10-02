@@ -164,3 +164,42 @@ export const CapIcon = (p) => (
     <path d="M21 9v5" />
   </Svg>
 );
+
+export const SearchIcon = (p) => (
+  <Svg {...p}>
+    <circle cx="11" cy="11" r="7" />
+    <path d="m20 20-3.5-3.5" />
+  </Svg>
+);
+
+export const HomeIcon = (p) => (
+  <Svg {...p}>
+    <path d="M3 10.5 12 3l9 7.5" />
+    <path d="M5 9v11h14V9" />
+    <path d="M10 20v-6h4v6" />
+  </Svg>
+);
+
+export const UsersIcon = (p) => (
+  <Svg {...p}>
+    <circle cx="9" cy="8" r="3.5" />
+    <path d="M2.5 20c0-3.6 2.9-6 6.5-6s6.5 2.4 6.5 6" />
+    <path d="M16 4.6a3.5 3.5 0 0 1 0 6.8" />
+    <path d="M18 14.3c2.1.7 3.5 2.8 3.5 5.7" />
+  </Svg>
+);
+
+export const CalendarIcon = (p) => (
+  <Svg {...p}>
+    <rect x="3" y="5" width="18" height="16" rx="2" />
+    <path d="M3 10h18" />
+    <path d="M8 3v4" />
+    <path d="M16 3v4" />
+  </Svg>
+);
+
+export const ChevronRightIcon = (p) => (
+  <Svg {...p}>
+    <path d="m9 18 6-6-6-6" />
+  </Svg>
+);

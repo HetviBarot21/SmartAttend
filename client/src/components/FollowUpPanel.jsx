@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { addFollowUp, getFollowUpsForStudent, updateStudent } from '../db/database';
+import { showToast } from '../lib/toast';
 import { useAuth } from '../auth/AuthContext';
 import { CheckCircleIcon, PhoneIcon, MailIcon } from './icons';
 
@@ -99,6 +100,7 @@ export default function FollowUpPanel({ studentId, flag, student, onStudentUpdat
     setBusy(true);
     try {
       await addFollowUp({ studentId, flag: flag === 'red' ? 'red' : 'amber', method, note, actorId: user?.username ?? null });
+      showToast('Follow-up logged');
       setNote('');
       await load();
     } catch (err) {

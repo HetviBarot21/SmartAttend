@@ -1,17 +1,17 @@
-import TopBar from './TopBar';
-
 /** Printable RFID card list. The print stylesheet hides everything outside `.cardlist-sheet`. */
 export default function CardList({ students, className, onClose }) {
   const rows = [...students].sort((a, b) => a.fullName.localeCompare(b.fullName));
   const issued = new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'long', year: 'numeric' });
 
   return (
-    <div className="app">
-      <div className="no-print">
-        <TopBar title="RFID Card List" onBack={onClose} />
+    <>
+      <div className="page-head no-print">
+        <div>
+          <h2 className="page-head__title">RFID card list</h2>
+          <button type="button" className="linkbtn linkbtn--inline" onClick={onClose}>Back to students</button>
+        </div>
       </div>
-
-      <div className="app__scroll">
+      <div>
         <p className="card__hint no-print" style={{ marginTop: 4 }}>
           Print this and encode each number onto the student’s card. Reissue a
           number from the roster if a card is lost.
@@ -56,6 +56,6 @@ export default function CardList({ students, className, onClose }) {
         <button type="button" className="btn btn--ghost no-print" onClick={onClose}>Done</button>
         <div aria-hidden="true" style={{ height: 24 }} />
       </div>
-    </div>
+    </>
   );
 }

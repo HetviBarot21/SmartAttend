@@ -1,20 +1,22 @@
-import { RosterIcon, GridIcon, BellIcon, ChartIcon } from './icons';
+import { RosterIcon, GridIcon, BellIcon, ChartIcon, HomeIcon, UsersIcon } from './icons';
 
 /** Nav items for the signed-in role. Shared by BottomNav (phone) and SideNav (desktop). */
 export function navItems(role) {
   const items = [
-    { id: 'attendance', label: 'Attendance', Icon: RosterIcon },
-    { id: 'heatmap', label: 'Heatmap', Icon: GridIcon },
-    { id: 'alerts', label: 'Alerts', Icon: BellIcon },
+    { id: 'dashboard', label: 'Dashboard', short: 'Home', Icon: HomeIcon },
+    { id: 'attendance', label: 'Take Attendance', short: 'Register', Icon: RosterIcon },
+    { id: 'heatmap', label: 'Reports', short: 'Reports', Icon: GridIcon },
+    { id: 'alerts', label: 'At-risk Students', short: 'At-risk', Icon: BellIcon },
   ];
-  if (role === 'admin') items.push({ id: 'overview', label: 'Overview', Icon: ChartIcon });
+  if (role === 'admin') items.push({ id: 'overview', label: 'School Overview', short: 'School', Icon: ChartIcon });
+  else items.push({ id: 'students', label: 'Students', short: 'Students', Icon: UsersIcon, section: 'Manage' });
   return items;
 }
 
-export default function BottomNav({ active, onChange, alertCount = 0, role }) {
+export default function BottomNav({ active, onChange, alertCount = 0, role, registerStatus = null }) {
   return (
     <nav className="bottom-nav" aria-label="Primary">
-      {navItems(role).map(({ id, label, Icon }) => (
+      {navItems(role).map(({ id, short, Icon }) => (
         <button
           key={id}
           type="button"
@@ -24,11 +26,10 @@ export default function BottomNav({ active, onChange, alertCount = 0, role }) {
         >
           <span className="bottom-nav__pill">
             <Icon size={20} />
+            {id === 'alerts' && alertCount > 0 && <span className="nav-count">{alertCount}</span>}
+            {id === 'attendance' && registerStatus === 'due' && <span className="nav-dot" aria-label="Register due" />}
           </span>
-          <span>
-            {label}
-            {id === 'alerts' && alertCount > 0 ? ` (${alertCount})` : ''}
-          </span>
+          <span>{short}</span>
         </button>
       ))}
     </nav>

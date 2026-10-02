@@ -40,7 +40,7 @@ export default function SystemAdminOverview() {
 
   return (
     <div className="app">
-      <TopBar title="System Admin" />
+      <TopBar crumbs={[{ label: 'System Admin' }]} />
       <div className="app__scroll">
         <p className="card__hint" style={{ marginTop: 4 }}>
           Every school on the platform. Deactivating a school is a status flag
