@@ -138,6 +138,7 @@ exports.handler = async (event) => {
     status: r.status,
     captureMethod: r.captureMethod || 'manual',
     recordedBy: r.recordedBy ?? null,
+    reason: r.reason ?? null,
     createdAt: r.createdAt,
     syncedAt: now,
     source: deviceId || 'unknown'

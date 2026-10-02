@@ -29,7 +29,7 @@ export function backoffMs(attemptCount, { base = RETRY_BASE_MS, max = RETRY_MAX_
 
 /** Only the fields attendanceSync.schema.js allows. */
 function toSyncRecord(event) {
-  return {
+  const record = {
     eventId: event.eventId,
     studentId: event.studentId,
     date: event.date,
@@ -38,6 +38,10 @@ function toSyncRecord(event) {
     recordedBy: event.recordedBy ?? null,
     createdAt: event.createdAt,
   };
+  // Only sent when set: the server treats a missing reason as "none", so
+  // clearing one (absent -> present) still reaches it via the status change.
+  if (event.reason) record.reason = event.reason;
+  return record;
 }
 
 /** Split rows into settled and retry. Rows the server did not mention are retried. */

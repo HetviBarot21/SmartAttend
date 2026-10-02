@@ -4,13 +4,15 @@ import {
   getStudentsByClass,
   getAttendanceForDate,
   todayISO,
+  GATE_CAPTURE_METHODS,
 } from '../db/database';
+import { pullGateAttendance } from '../services/gateService';
 import { useAuth } from '../auth/AuthContext';
 import { formatLongDate } from '../lib/attendanceSummary';
 import { isSchoolDay } from '../lib/riskModel';
+import { showToast } from '../lib/toast';
 import Avatar from './Avatar';
 import { SyncIcon, SearchIcon } from './icons';
-import { showToast } from '../lib/toast';
 
 const FILTERS = [
   { id: 'all', label: 'All' },
@@ -18,12 +20,24 @@ const FILTERS = [
   { id: 'absent', label: 'Absent' },
 ];
 
-// A late record (e.g. from an RFID scan) still counts as present here.
+const REASONS = [
+  { code: 'fee', label: 'Fees' },
+  { code: 'health', label: 'Sick' },
+  { code: 'other', label: 'Other' },
+  { code: 'unknown', label: "Don't know" },
+];
+
+// A late record (e.g. from a gate scan after the bell) still counts as present here.
 const isPresent = (status) => status === 'present' || status === 'late';
 
+const timeOf = (iso) =>
+  iso ? new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '';
+
 /**
- * Class register. Every student starts ticked as present; the teacher unticks
- * whoever is absent and saves.
+ * Class register. Without the school gate every student starts ticked present
+ * and the teacher unticks whoever is absent. With the gate running, students
+ * who scanned in are already present and the ones who did not start unticked,
+ * so the teacher only ticks late arrivals and gives absence reasons.
  */
 export default function AttendanceForm({ classGroupId, pending = 0, onRecordsChanged, onOpenProfile, onDirtyChange }) {
   const { user } = useAuth();
@@ -31,44 +45,92 @@ export default function AttendanceForm({ classGroupId, pending = 0, onRecordsCha
   const [date, setDate] = useState(today);
 
   const [students, setStudents] = useState([]);
-  const [recorded, setRecorded] = useState({});
+  // studentId -> the saved Dexie record for this date
+  const [saved, setSaved] = useState({});
   const [draft, setDraft] = useState({});
+  const [reasonDraft, setReasonDraft] = useState({});
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [query, setQuery] = useState('');
   const [filter, setFilter] = useState('all');
-  const headerRef = useRef(null);
   const [touched, setTouched] = useState(false); // the teacher changed something since the last save
+  // null while the gate check is in flight; only checked for today's register
+  const [gate, setGate] = useState(null);
+  const [checkingGate, setCheckingGate] = useState(false);
+  const [conflicts, setConflicts] = useState([]);
+  const headerRef = useRef(null);
 
-  const load = useCallback(async () => {
-    const [roll, todays] = await Promise.all([
+  const readLocal = useCallback(async () => {
+    const [roll, records] = await Promise.all([
       getStudentsByClass(classGroupId),
       getAttendanceForDate(classGroupId, date),
     ]);
-    const saved = Object.fromEntries(todays.map((r) => [r.studentId, r.status]));
     setStudents(roll);
-    setRecorded(saved);
-    // Default anyone not yet recorded to present.
-    setDraft(Object.fromEntries(roll.filter((s) => !(s.studentId in saved)).map((s) => [s.studentId, 'present'])));
-    setTouched(false);
+    setSaved(Object.fromEntries(records.map((r) => [r.studentId, r])));
     setLoading(false);
   }, [classGroupId, date]);
 
-  useEffect(() => { load(); }, [load]);
+  // Pull what the gate has recorded, merge it, then re-read. Unsaved ticks are
+  // kept: a gate refresh must never wipe what the teacher is doing.
+  const refreshGate = useCallback(async () => {
+    if (date !== today) return;
+    setCheckingGate(true);
+    try {
+      const outcome = await pullGateAttendance(classGroupId, { date });
+      setGate(outcome);
+      if (outcome.replaced.length > 0) setConflicts(outcome.replaced);
+      if (outcome.added.length || outcome.updated.length || outcome.replaced.length) {
+        await readLocal();
+        onRecordsChanged?.();
+      }
+    } finally {
+      setCheckingGate(false);
+    }
+  }, [classGroupId, date, today, readLocal, onRecordsChanged]);
+
+  // Local records first (instant, works offline), then the gate on top.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      await readLocal();
+      if (!cancelled) await refreshGate();
+    })();
+    return () => { cancelled = true; };
+  }, [readLocal, refreshGate]);
+
+  const recorded = useMemo(
+    () => Object.fromEntries(Object.entries(saved).map(([id, r]) => [id, r.status])),
+    [saved],
+  );
+
+  const gateActive = date === today && gate?.status === 'active';
+  // Status for a student with no record yet: with the gate running, no scan means absent.
+  const defaultStatus = gateActive ? 'absent' : 'present';
 
   const valueFor = useCallback(
-    (studentId) => (studentId in draft ? draft[studentId] : recorded[studentId]),
-    [draft, recorded],
+    (studentId) => (studentId in draft ? draft[studentId] : recorded[studentId] ?? defaultStatus),
+    [draft, recorded, defaultStatus],
+  );
+  const savedReason = useCallback((studentId) => saved[studentId]?.reason ?? null, [saved]);
+  const reasonFor = useCallback(
+    (studentId) => (studentId in reasonDraft ? reasonDraft[studentId] : savedReason(studentId)),
+    [reasonDraft, savedReason],
   );
 
+  // Rows whose status or absence reason differs from what is saved; these are written on save.
   const dirty = useMemo(
-    () => students.filter((s) => s.studentId in draft && draft[s.studentId] !== recorded[s.studentId]),
-    [students, draft, recorded],
+    () => students.filter((s) => {
+      const status = valueFor(s.studentId);
+      if (status !== recorded[s.studentId]) return true;
+      return status === 'absent' && reasonFor(s.studentId) !== savedReason(s.studentId);
+    }),
+    [students, valueFor, recorded, reasonFor, savedReason],
   );
-  const savedCount = students.filter((s) => s.studentId in recorded).length;
-  const firstSave = savedCount === 0;
+
+  const isGateRecord = (studentId) => GATE_CAPTURE_METHODS.includes(saved[studentId]?.captureMethod);
+  const atGateCount = students.filter((s) => isGateRecord(s.studentId)).length;
 
   const counts = useMemo(() => {
     const c = { all: students.length, present: 0, absent: 0 };
@@ -104,7 +166,7 @@ export default function AttendanceForm({ classGroupId, pending = 0, onRecordsCha
   }, [unsaved, onDirtyChange]);
   useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
 
-  // Present keeps a saved "late" as it was; absent is always absent.
+  // Ticking keeps a saved "late" as it was; unticking is always absent.
   function statusFor(studentId, present) {
     if (present) return isPresent(recorded[studentId]) ? recorded[studentId] : 'present';
     return 'absent';
@@ -120,11 +182,26 @@ export default function AttendanceForm({ classGroupId, pending = 0, onRecordsCha
     });
   }
 
+  function chooseReason(studentId, code) {
+    setResult(null);
+    setTouched(true);
+    setReasonDraft((prev) => ({ ...prev, [studentId]: code || null }));
+  }
+
+  function resetDrafts() {
+    setDraft({});
+    setReasonDraft({});
+    setTouched(false);
+  }
+
   function changeDate(next) {
     if (!next || next > today) return;
-    if (savedCount > 0 && dirty.length > 0 && !window.confirm('You have unsaved changes. Discard them and switch date?')) return;
+    if (unsaved && !window.confirm('You have unsaved changes. Discard them and switch date?')) return;
+    resetDrafts();
     setResult(null);
     setError(null);
+    setGate(null);
+    setConflicts([]);
     setLoading(true);
     setDate(next);
   }
@@ -133,13 +210,17 @@ export default function AttendanceForm({ classGroupId, pending = 0, onRecordsCha
     setError(null);
     setSaving(true);
     try {
-      const events = dirty.map((s) => ({
-        studentId: s.studentId,
-        date,
-        status: draft[s.studentId],
-        captureMethod: 'manual',
-        recordedBy: user?.username ?? null,
-      }));
+      const events = dirty.map((s) => {
+        const status = valueFor(s.studentId);
+        return {
+          studentId: s.studentId,
+          date,
+          status,
+          reason: status === 'absent' ? reasonFor(s.studentId) : null,
+          captureMethod: 'manual',
+          recordedBy: user?.username ?? null,
+        };
+      });
       if (events.length === 0) return;
 
       const outcome = await setAttendanceBatch(events);
@@ -147,7 +228,8 @@ export default function AttendanceForm({ classGroupId, pending = 0, onRecordsCha
       if (outcome.saved.length > 0) {
         showToast(`Attendance saved for ${formatLongDate(date)}: ${counts.present} present, ${counts.absent} absent`);
       }
-      await load();
+      resetDrafts();
+      await readLocal();
       onRecordsChanged?.();
     } catch (err) {
       setError(err.message ?? 'Could not save attendance');
@@ -157,6 +239,10 @@ export default function AttendanceForm({ classGroupId, pending = 0, onRecordsCha
   }
 
   if (loading) return <p className="empty">Loading class list…</p>;
+
+  const nameOf = (studentId) => students.find((s) => s.studentId === studentId)?.fullName ?? studentId;
+  const nothingSaved = students.every((s) => !(s.studentId in recorded));
+  const verb = gateActive ? 'Confirm' : 'Save';
 
   return (
     <div className="register">
@@ -182,15 +268,35 @@ export default function AttendanceForm({ classGroupId, pending = 0, onRecordsCha
         </div>
       </div>
 
+      {date === today && (
+        <GateBanner gate={gate} checking={checkingGate} atGateCount={atGateCount} total={students.length} onRefresh={refreshGate} />
+      )}
+
+      {conflicts.length > 0 && (
+        <div className="notice notice--warn conflict-note" role="alert">
+          <div>
+            {conflicts.map((c) => (
+              <div key={c.studentId}>
+                {nameOf(c.studentId)} {GATE_CAPTURE_METHODS.includes(c.captureMethod)
+                  ? `scanned in at the gate at ${timeOf(c.createdAt)}`
+                  : `was already marked ${c.serverStatus} on the school system`}
+                {' '}- your &quot;{c.localStatus}&quot; mark was replaced.
+              </div>
+            ))}
+          </div>
+          <button type="button" className="btn btn--outline btn--sm" onClick={() => setConflicts([])}>OK</button>
+        </div>
+      )}
+
       {error && <div className="notice notice--err" role="alert">{error}</div>}
       {result && result.failed.length > 0 && (
         <div className="notice notice--err" role="alert">
           {result.failed.length} record(s) could not be saved.
         </div>
       )}
-      {firstSave && !result && students.length > 0 && (
+      {nothingSaved && !gateActive && !result && students.length > 0 && (
         <div className="notice notice--info" role="status">
-          Everyone is ticked as present. Untick the students who are absent, then save.
+          Everyone is ticked as present. Untick the students who are absent, add a reason if you know it, then save.
         </div>
       )}
 
@@ -254,13 +360,13 @@ export default function AttendanceForm({ classGroupId, pending = 0, onRecordsCha
               )}
               {visible.map((student) => {
                 const id = student.studentId;
-                const present = isPresent(valueFor(id));
-                const changed = id in recorded && id in draft && draft[id] !== recorded[id];
+                const status = valueFor(id);
+                const present = isPresent(status);
+                const record = saved[id];
+                const changed = id in recorded && dirty.some((s) => s.studentId === id);
+                const fromGate = isGateRecord(id) && !(id in draft && draft[id] !== recorded[id]);
                 return (
-                  <tr
-                    key={id}
-                    className={`${present ? '' : 'row--absent'}${changed ? ' row--edited' : ''}`}
-                  >
+                  <tr key={id} className={`${present ? '' : 'row--absent'}${changed ? ' row--edited' : ''}`}>
                     <td className="col-check">
                       <input
                         type="checkbox"
@@ -288,11 +394,32 @@ export default function AttendanceForm({ classGroupId, pending = 0, onRecordsCha
                     </td>
                     <td className="col-adm">{student.admissionNo || '-'}</td>
                     <td className="col-state">
-                      <span className={`badge ${present ? 'badge--ok' : 'badge--danger-soft'}`}>
-                        {present ? 'Present' : 'Absent'}
-                      </span>
-                      {changed && <span className="state-note">changed</span>}
-                      {!(id in recorded) && <span className="state-note">not saved</span>}
+                      <div className="state-cell">
+                        <span className={`badge ${present ? 'badge--ok' : 'badge--danger-soft'}`}>
+                          {status === 'late' ? 'Late' : present ? 'Present' : 'Absent'}
+                        </span>
+                        {!present && (
+                          <select
+                            className="reason-select"
+                            value={reasonFor(id) ?? ''}
+                            onChange={(e) => chooseReason(id, e.target.value)}
+                            disabled={saving}
+                            aria-label={`Why was ${student.fullName} absent?`}
+                          >
+                            <option value="">Reason…</option>
+                            {REASONS.map((r) => <option key={r.code} value={r.code}>{r.label}</option>)}
+                          </select>
+                        )}
+                        {fromGate ? (
+                          <span className="state-note">
+                            gate {timeOf(record.createdAt)}{record.captureMethod === 'fingerprint' ? ' (fingerprint)' : ''}
+                          </span>
+                        ) : changed ? (
+                          <span className="state-note">changed</span>
+                        ) : !(id in recorded) ? (
+                          <span className="state-note">{gateActive ? 'not scanned' : 'not saved'}</span>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -307,13 +434,15 @@ export default function AttendanceForm({ classGroupId, pending = 0, onRecordsCha
           <SyncIcon size={14} />
           <span>
             <b>{counts.present}</b> present · <b>{counts.absent}</b> absent
-            {' · '}
-            {pending > 0 ? `${pending} record${pending === 1 ? '' : 's'} waiting to sync` : 'all synced'}
+            <span className="savebar__sync">
+              {' · '}
+              {pending > 0 ? `${pending} record${pending === 1 ? '' : 's'} waiting to sync` : 'all synced'}
+            </span>
           </span>
         </div>
         <div className="savebar__actions">
-          {!firstSave && dirty.length > 0 && (
-            <button type="button" className="btn btn--outline btn--sm" onClick={load} disabled={saving}>
+          {touched && dirty.length > 0 && (
+            <button type="button" className="btn btn--outline btn--sm" onClick={resetDrafts} disabled={saving}>
               Discard
             </button>
           )}
@@ -323,16 +452,45 @@ export default function AttendanceForm({ classGroupId, pending = 0, onRecordsCha
             onClick={handleSubmit}
             disabled={saving || dirty.length === 0}
           >
-            {saving
-              ? 'Saving…'
-              : firstSave
-                ? 'Save attendance'
-                : dirty.length > 0
-                  ? `Save changes (${dirty.length})`
-                  : 'Saved'}
+            {saving ? 'Saving…' : dirty.length > 0 ? `${verb} attendance (${dirty.length})` : 'Saved'}
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/** What the gate knows, or why the teacher is on a full manual roll call. */
+function GateBanner({ gate, checking, atGateCount, total, onRefresh }) {
+  if (!gate) {
+    return <div className="notice notice--info gate-banner" role="status"><span>Checking the school gate…</span></div>;
+  }
+
+  const copy = {
+    active: {
+      tone: 'ok',
+      text: `${atGateCount} of ${total} scanned in at the gate (last scan ${timeOf(gate.lastScanAt)}). Students who did not scan are unticked: tick anyone who is here and give reasons for the rest.`,
+    },
+    'no-scans': {
+      tone: 'warn',
+      text: 'No gate scans yet today. If students have arrived, the gate may be down: take a full roll call.',
+    },
+    unreachable: {
+      tone: 'info',
+      text: "Can't reach the school gate, so take a full roll call. Marks save on this device and sync later.",
+    },
+    'unknown-class': {
+      tone: 'info',
+      text: "This class isn't on the school gate yet. Take the roll call as usual.",
+    },
+  }[gate.status];
+
+  return (
+    <div className={`notice notice--${copy.tone} gate-banner`} role="status">
+      <span>{copy.text}</span>
+      <button type="button" className="btn btn--outline btn--sm" onClick={onRefresh} disabled={checking}>
+        {checking ? 'Checking…' : 'Refresh'}
+      </button>
     </div>
   );
 }

@@ -44,6 +44,26 @@ db.version(3).stores({
 
 export const ATTENDANCE_STATUSES = ['present', 'absent', 'late'];
 
+/**
+ * Why a student was absent. Mirrors the server's attendanceSync.schema.js.
+ * Only 'fee' and 'health' feed the risk model; the other two let a teacher
+ * record something anyway. Stored as a plain (unindexed) field, so no Dexie
+ * version bump is needed.
+ */
+export const ABSENCE_REASONS = ['fee', 'health', 'other', 'unknown'];
+
+/** Capture methods that mean "the school gate hardware recorded this". */
+export const GATE_CAPTURE_METHODS = ['rfid', 'fingerprint'];
+
+/** A reason only means something on an absence; anything else carries none. */
+function normalizeReason(status, reason) {
+  if (status !== 'absent' || reason == null) return null;
+  if (!ABSENCE_REASONS.includes(reason)) {
+    throw new Error(`reason must be one of ${ABSENCE_REASONS.join(', ')} (got "${reason}")`);
+  }
+  return reason;
+}
+
 /** Raised when a record for this student/date already exists. */
 export class DuplicateAttendanceError extends Error {
   constructor(studentId, date) {
@@ -86,6 +106,7 @@ export async function addAttendanceEvent(event) {
   if (!ATTENDANCE_STATUSES.includes(status)) {
     throw new Error(`status must be one of ${ATTENDANCE_STATUSES.join(', ')} (got "${status}")`);
   }
+  const reason = normalizeReason(status, event.reason);
 
   const eventId = newId();
   const createdAt = new Date().toISOString();
@@ -97,6 +118,7 @@ export async function addAttendanceEvent(event) {
     status,
     captureMethod,
     recordedBy: recordedBy ?? null,
+    reason,
     syncedAt: null,
     createdAt
   };
@@ -123,8 +145,17 @@ export async function addAttendanceEvent(event) {
 }
 
 /**
- * Create or update a student's record for a date. An update keeps the original
- * eventId and puts the record back on the sync queue.
+ * Set a student's status for a date, creating the record if it does not exist
+ * yet and updating it in place if it does.
+ *
+ * Attendance is a living value during the school day - a student marked absent
+ * at 8am who walks in at 9am should become `late`, not stay wrong until
+ * tomorrow. The record keeps its original `eventId` (the sync idempotency key -
+ * its identity has not changed, only its content), gets an `updatedAt` stamp,
+ * and is put back on the sync queue as `pending` so the correction propagates.
+ * Every change writes an `attendance.updated` audit row with `{from, to}`.
+ * An absence `reason` counts as content too: adding or changing one on an
+ * existing absence is an update, so a reason learned at noon still syncs.
  *
  * @returns {Promise<{record: object, changed: boolean, created: boolean}>}
  * @throws {Error} on an invalid studentId / date / status
@@ -138,6 +169,8 @@ export async function setAttendance(event) {
     throw new Error(`status must be one of ${ATTENDANCE_STATUSES.join(', ')} (got "${status}")`);
   }
 
+  const reason = normalizeReason(status, event.reason);
+
   const existing = await db.attendanceEvents
     .where('[studentId+date]')
     .equals([studentId, date])
@@ -148,7 +181,8 @@ export async function setAttendance(event) {
     return { record, changed: true, created: true };
   }
 
-  if (existing.status === status) {
+  const existingReason = existing.reason ?? null;
+  if (existing.status === status && existingReason === reason) {
     return { record: existing, changed: false, created: false };
   }
 
@@ -158,6 +192,7 @@ export async function setAttendance(event) {
       status,
       captureMethod,
       recordedBy: recordedBy ?? existing.recordedBy ?? null,
+      reason,
       updatedAt,
       syncedAt: null,
     });
@@ -178,12 +213,16 @@ export async function setAttendance(event) {
       actorId: recordedBy ?? null,
       recordId: existing.eventId,
       timestamp: updatedAt,
-      detail: JSON.stringify({ from: existing.status, to: status }),
+      detail: JSON.stringify({
+        from: existing.status,
+        to: status,
+        ...(existingReason || reason ? { fromReason: existingReason, toReason: reason } : {}),
+      }),
     });
   });
 
   return {
-    record: { ...existing, status, captureMethod, updatedAt, syncedAt: null },
+    record: { ...existing, status, captureMethod, reason, updatedAt, syncedAt: null },
     changed: true,
     created: false,
   };
@@ -232,6 +271,110 @@ export async function addAttendanceBatch(events) {
   }
 
   return { saved, duplicates, failed };
+}
+
+/**
+ * Merge what the school gate server holds for a class/day (see
+ * services/gateService.js) into this device's attendance records.
+ *
+ * Every incoming row is already on the server, so it is stored with the
+ * server's own `eventId` and `syncedAt` set and no `syncQueue` row - it never
+ * gets pushed back up. Per student/day:
+ *
+ *   - nothing local                 -> store the server's record
+ *   - same eventId (we pulled it before, or pushed it ourselves)
+ *       - local edit still queued   -> keep the local edit; it is newer and on
+ *                                      its way up
+ *       - otherwise                 -> take the server's current content
+ *   - a *different* local eventId   -> the server keeps the first record per
+ *     (e.g. teacher marked Kevin       student/day and will reject ours, so the
+ *     absent offline, but he had       server's wins: the local record and its
+ *     scanned in at the gate)          queue row are replaced. Reported in
+ *                                      `replaced` when the status differs, so
+ *                                      the teacher can be told.
+ *
+ * @param {object[]} records  rows from GET /api/gate/classes/:id/attendance
+ * @returns {Promise<{added: string[], updated: string[], replaced: {studentId, localStatus, serverStatus, captureMethod, createdAt}[]}>}
+ */
+export async function applyGateRecords(records, { now = new Date() } = {}) {
+  const syncedAt = now.toISOString();
+  const added = [];
+  const updated = [];
+  const replaced = [];
+
+  await db.transaction('rw', db.attendanceEvents, db.syncQueue, db.auditLog, async () => {
+    for (const r of records) {
+      if (!ATTENDANCE_STATUSES.includes(r.status)) continue;
+      const incoming = {
+        eventId: r.eventId,
+        studentId: r.studentId,
+        date: r.date,
+        status: r.status,
+        captureMethod: r.captureMethod || 'manual',
+        verified: !!r.verified,
+        recordedBy: r.recordedBy ?? null,
+        reason: r.status === 'absent' && ABSENCE_REASONS.includes(r.reason) ? r.reason : null,
+        source: r.source ?? null,
+        createdAt: r.createdAt,
+        syncedAt,
+      };
+
+      const local = await db.attendanceEvents
+        .where('[studentId+date]')
+        .equals([r.studentId, r.date])
+        .first();
+
+      if (!local) {
+        await db.attendanceEvents.add(incoming);
+        await db.auditLog.add({
+          action: 'attendance.pulled', actorId: null, recordId: r.eventId, timestamp: syncedAt,
+          detail: JSON.stringify({ studentId: r.studentId, status: r.status, captureMethod: incoming.captureMethod }),
+        });
+        added.push(r.studentId);
+        continue;
+      }
+
+      const queued = await db.syncQueue.where('eventId').equals(local.eventId).first();
+      const localUnsent = !!queued && (queued.status === 'pending' || queued.status === 'failed');
+
+      if (local.eventId === r.eventId) {
+        if (localUnsent) continue;
+        if (local.status !== incoming.status || (local.reason ?? null) !== incoming.reason) {
+          await db.attendanceEvents.update(local.id, {
+            status: incoming.status,
+            captureMethod: incoming.captureMethod,
+            verified: incoming.verified,
+            recordedBy: incoming.recordedBy,
+            reason: incoming.reason,
+            syncedAt,
+          });
+          updated.push(r.studentId);
+        }
+        continue;
+      }
+
+      await db.attendanceEvents.delete(local.id);
+      if (queued) await db.syncQueue.delete(queued.id);
+      await db.attendanceEvents.add(incoming);
+      await db.auditLog.add({
+        action: 'attendance.replaced', actorId: null, recordId: r.eventId, timestamp: syncedAt,
+        detail: JSON.stringify({
+          studentId: r.studentId, replacedEventId: local.eventId, from: local.status, to: incoming.status,
+        }),
+      });
+      if (local.status !== incoming.status) {
+        replaced.push({
+          studentId: r.studentId,
+          localStatus: local.status,
+          serverStatus: incoming.status,
+          captureMethod: incoming.captureMethod,
+          createdAt: incoming.createdAt,
+        });
+      }
+    }
+  });
+
+  return { added, updated, replaced };
 }
 
 export async function getStudentById(studentId) {

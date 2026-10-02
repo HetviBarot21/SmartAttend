@@ -49,7 +49,7 @@ const selectDue = db.prepare(`
 
 const rebuildPayload = db.prepare(`
   SELECT event_id AS eventId, student_id AS studentId, date, status,
-         capture_method AS captureMethod, recorded_by AS recordedBy, created_at
+         capture_method AS captureMethod, recorded_by AS recordedBy, reason, created_at
   FROM attendance_events WHERE event_id = ?
 `);
 

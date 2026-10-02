@@ -682,8 +682,27 @@ input  { font-family: inherit; }
 .register-table tr.row--absent:hover { background: #fdeeee; }
 .register-table .col-check { width: 52px; text-align: center; }
 .register-table .col-num { width: 36px; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
-.register-table .col-state { width: 170px; white-space: nowrap; }
-.state-note { margin-left: 8px; font-size: 12px; color: var(--ink-muted); }
+.register-table .col-state { width: 300px; }
+.state-cell { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 10px; }
+.state-note { font-size: 12px; color: var(--ink-muted); white-space: nowrap; }
+.reason-select {
+  height: 30px;
+  padding: 0 26px 0 10px;
+  border: 1px solid #fecaca;
+  border-radius: var(--radius-sm);
+  background: var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%2364748b' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E") no-repeat right 8px center;
+  appearance: none;
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  cursor: pointer;
+}
+.reason-select:focus { outline: none; border-color: var(--indigo-600); box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15); }
+
+/* gate status and gate-override notes above the register */
+.gate-banner, .conflict-note { display: flex; align-items: center; gap: 12px; }
+.gate-banner > span, .conflict-note > div { flex: 1; min-width: 0; }
+.gate-banner .btn, .conflict-note .btn { flex: none; }
 
 /* save bar pinned to the bottom of the viewport while scrolling the register */
 .savebar {
@@ -1028,6 +1047,7 @@ button.student-cell:hover .student-cell__name { color: var(--indigo-600); text-d
   .register-table .col-num { display: none; }
   .register-table .col-state { width: auto; }
   .register-table .state-note { display: none; }
+  .savebar__sync { display: none; }
   .register-table td, .register-table th { padding-left: 10px; padding-right: 10px; }
   .col-hide-sm { display: none; }
   .search { max-width: none; }

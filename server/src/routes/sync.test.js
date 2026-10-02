@@ -119,6 +119,69 @@ describe('POST /api/sync', () => {
     assert.equal(count("SELECT COUNT(*) c FROM audit_log WHERE action = 'sync.updated'"), 1);
   });
 
+  describe('absence reason', () => {
+    const reasonOf = (eventId) =>
+      db.prepare('SELECT reason FROM attendance_events WHERE event_id = ?').get(eventId).reason;
+
+    test('stores the reason on an absence and carries it in the cloud payload', async () => {
+      const rec = record({ status: 'absent', reason: 'fee' });
+      const res = await postSync({ records: [rec] });
+      assert.equal((await res.json()).insertedCount, 1);
+
+      assert.equal(reasonOf(rec.eventId), 'fee');
+      const q = db.prepare('SELECT payload FROM sync_queue WHERE event_id = ?').get(rec.eventId);
+      assert.equal(JSON.parse(q.payload).reason, 'fee');
+    });
+
+    test('a record without a reason still syncs (older PWA builds)', async () => {
+      const rec = record({ status: 'absent' });
+      const res = await postSync({ records: [rec] });
+      assert.equal((await res.json()).insertedCount, 1);
+      assert.equal(reasonOf(rec.eventId), null);
+    });
+
+    test('rejects a reason outside the fixed list', async () => {
+      const res = await postSync({ records: [record({ status: 'absent', reason: 'lazy' })] });
+      assert.equal(res.status, 400);
+      assert.equal(count('SELECT COUNT(*) c FROM attendance_events'), 0);
+    });
+
+    test('drops a reason sent on a non-absent mark', async () => {
+      const rec = record({ status: 'present', reason: 'health' });
+      await postSync({ records: [rec] });
+      assert.equal(reasonOf(rec.eventId), null);
+    });
+
+    test('a reason added later updates the record and re-queues it', async () => {
+      const rec = record({ status: 'absent' });
+      await postSync({ records: [rec] });
+      db.prepare("UPDATE sync_queue SET status = 'synced' WHERE event_id = ?").run(rec.eventId);
+
+      const res = await postSync({ records: [{ ...rec, reason: 'health' }] });
+      const body = await res.json();
+
+      assert.deepEqual(body.updated, [rec.eventId]);
+      assert.equal(reasonOf(rec.eventId), 'health');
+      const q = db.prepare('SELECT status FROM sync_queue WHERE event_id = ?').get(rec.eventId);
+      assert.equal(q.status, 'pending');
+    });
+
+    test('correcting absent -> present clears the old reason', async () => {
+      const rec = record({ status: 'absent', reason: 'fee' });
+      await postSync({ records: [rec] });
+
+      await postSync({ records: [{ ...rec, status: 'present' }] });
+      assert.equal(reasonOf(rec.eventId), null);
+    });
+
+    test('re-sending the same absence + reason is still a duplicate', async () => {
+      const rec = record({ status: 'absent', reason: 'fee' });
+      await postSync({ records: [rec] });
+      const body = await (await postSync({ records: [rec] })).json();
+      assert.equal(body.skipped[0].reason, 'duplicate_event_id');
+    });
+  });
+
   test('skips a different event that collides on student + date', async () => {
     const first = record();
     await postSync({ records: [first] });

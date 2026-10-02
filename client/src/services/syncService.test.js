@@ -131,6 +131,18 @@ describe('drainSyncQueue', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
     expect(summary).toMatchObject({ eligible: 0, synced: 0, failed: 0 });
   });
+
+  it('sends the absence reason when there is one, and omits it otherwise', async () => {
+    const absent = await addAttendanceEvent({ studentId: 'stu-1', date: DATE, status: 'absent', reason: 'fee' });
+    const present = await addAttendanceEvent({ studentId: 'stu-2', date: DATE, status: 'present' });
+
+    const fetchImpl = fetchReturning({ inserted: [absent.eventId, present.eventId], skipped: [] });
+    await drainSyncQueue({ fetchImpl });
+
+    const { records } = JSON.parse(fetchImpl.mock.calls[0][1].body);
+    expect(records.find((r) => r.eventId === absent.eventId).reason).toBe('fee');
+    expect(records.find((r) => r.eventId === present.eventId)).not.toHaveProperty('reason');
+  });
 });
 
 describe('backoffMs', () => {

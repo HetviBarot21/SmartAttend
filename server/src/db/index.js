@@ -43,6 +43,9 @@ function migrate(db) {
   if (!hasColumn('schools', 'status')) {
     db.exec(`ALTER TABLE schools ADD COLUMN status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active', 'inactive'))`);
   }
+  if (!hasColumn('attendance_events', 'reason')) {
+    db.exec(`ALTER TABLE attendance_events ADD COLUMN reason TEXT CHECK (reason IN ('fee', 'health', 'other', 'unknown'))`);
+  }
 }
 
 let singleton = null;

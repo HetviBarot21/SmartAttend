@@ -131,6 +131,41 @@ export function getAttendanceForDate(db, date = todayISO()) {
     .all(date);
 }
 
+/** SQLite `datetime('now')` ('YYYY-MM-DD HH:MM:SS', UTC) -> RFC3339; ISO strings pass through. */
+function toIsoTimestamp(value) {
+  if (value == null) return null;
+  return /^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}$/.test(value) ? `${value.replace(' ', 'T')}Z` : value;
+}
+
+/**
+ * Every attendance record the server holds for one class on one day - gate
+ * scans and teacher marks alike - in the camelCase shape the PWA's Dexie
+ * `attendanceEvents` rows use, so the phone can store them as-is (keeping the
+ * server's eventId, which makes a later push back a harmless duplicate).
+ */
+export function getClassAttendanceForDate(db, classGroupId, date = todayISO()) {
+  return db
+    .prepare(
+      `SELECT a.event_id AS eventId, a.student_id AS studentId, a.date, a.status,
+              a.capture_method AS captureMethod, a.verified, a.recorded_by AS recordedBy,
+              a.reason, a.source, a.created_at AS createdAt
+         FROM attendance_events a
+         JOIN students s ON s.student_id = a.student_id
+        WHERE s.class_group_id = ? AND a.date = ?
+        ORDER BY a.created_at`
+    )
+    .all(classGroupId, date)
+    .map((r) => ({ ...r, verified: r.verified === 1, createdAt: toIsoTimestamp(r.createdAt) }));
+}
+
+/** When the gate hardware last recorded anyone - the phone's "is the gate alive?" signal. */
+export function getLastGateScanAt(db) {
+  const row = db
+    .prepare(`SELECT MAX(created_at) AS at FROM attendance_events WHERE capture_method IN ('rfid', 'fingerprint')`)
+    .get();
+  return toIsoTimestamp(row.at);
+}
+
 export function getRecentChallenges(db, limit = 50) {
   return db
     .prepare(
